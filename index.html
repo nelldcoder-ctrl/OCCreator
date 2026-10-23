@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10284b">
+  <title>Fable — Character Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#top" aria-label="Fable home">
+        <span class="brand-mark" aria-hidden="true">f.</span>
+        <span>fable<span class="brand-period">.</span></span>
+      </a>
+
+      <div class="workspace-label">YOUR WORKSPACE</div>
+      <nav class="side-nav" aria-label="Main navigation">
+        <a class="nav-link active" href="#studio"><span class="nav-icon">✳</span> Character studio</a>
+        <a class="nav-link" href="#cast"><span class="nav-icon">▦</span> Your characters <span class="nav-count" id="sidebar-count">0</span></a>
+      </nav>
+
+      <div class="sidebar-note">
+        <div class="note-sparkle">✦</div>
+        <p class="note-title">Every story starts somewhere.</p>
+        <p class="note-copy">Make a little room for the characters who live in your head.</p>
+        <button class="text-button" id="sidebar-new" type="button">Create a character <span>↗</span></button>
+      </div>
+      <div class="sidebar-footer"><span class="status-dot"></span> Saved privately on this device</div>
+    </aside>
+
+    <main class="main-content" id="top">
+      <header class="topbar">
+        <div class="breadcrumb">YOUR UNIVERSE <span>/</span> <strong>CHARACTER STUDIO</strong></div>
+        <button class="button button-quiet" id="new-character" type="button"><span>＋</span> New character</button>
+      </header>
+
+      <section class="intro" id="studio">
+        <div>
+          <p class="eyebrow"><span class="eyebrow-line"></span> YOUR CHARACTER WORKSPACE</p>
+          <h1>Build a character,<br class="desktop-break"> <em>one detail at a time.</em></h1>
+          <p class="intro-copy">Start with the basics. Add a little personality, then tell us their story.</p>
+        </div>
+        <div class="intro-doodle" aria-hidden="true"><span>✳</span><i></i></div>
+      </section>
+
+      <section class="studio-grid" aria-label="Character editor and live preview">
+        <div class="panel editor-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">CHARACTER EDITOR</p><h2>Tell us about them</h2></div>
+            <span class="autosave-label"><span class="status-dot"></span> <span id="autosave-status">Draft autosaves here</span></span>
+          </div>
+
+          <form id="character-form">
+            <input id="character-id" type="hidden">
+            <fieldset class="form-section" id="basic-details">
+              <legend><span class="section-number">1</span> The basics</legend>
+              <p class="section-help">Give your character a name and a few defining details.</p>
+              <div class="form-row two-columns">
+                <label class="field">Character name <span class="required">*</span>
+                  <input id="name" name="name" type="text" placeholder="e.g. Rowan Vale" maxlength="48" required>
+                </label>
+                <label class="field">Role or type
+                  <input id="role" name="role" type="text" placeholder="e.g. reluctant botanist" maxlength="60">
+                </label>
+              </div>
+              <div class="form-row three-columns">
+                <label class="field">Pronouns
+                  <input id="pronouns" name="pronouns" type="text" placeholder="e.g. they / them" maxlength="30">
+                </label>
+                <label class="field">Age
+                  <input id="age" name="age" type="text" placeholder="e.g. 27" maxlength="24">
+                </label>
+                <label class="field">Species
+                  <input id="species" name="species" type="text" placeholder="e.g. Human" maxlength="36">
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset class="form-section" id="personality-details">
+              <legend><span class="section-number">2</span> Personality</legend>
+              <p class="section-help">Describe who they are in everyday life. A sentence or two is plenty.</p>
+              <label class="field">Quick description
+                <textarea id="description" name="description" rows="3" maxlength="360" placeholder="What are they like? What might someone notice when they first meet?"></textarea>
+                <span class="field-hint"><span id="description-count">0</span> / 360</span>
+              </label>
+              <label class="field">A few traits <span class="field-hint inline-hint">Use commas between traits</span>
+                <input id="traits" name="traits" type="text" placeholder="e.g. curious, brave, a little stubborn" maxlength="160">
+              </label>
+            </fieldset>
+
+            <fieldset class="form-section" id="background-details">
+              <legend><span class="section-number">3</span> Their background</legend>
+              <p class="section-help">This is their past: where they came from, what happened, and what matters to them.</p>
+              <label class="field">Backstory <span class="optional-label">Optional</span>
+                <textarea id="story" name="story" rows="4" maxlength="700" placeholder="Where did they grow up? What shaped them? Is there a moment that changed everything?"></textarea>
+              </label>
+            </fieldset>
+
+            <details class="optional-section" id="appearance-details">
+              <summary><span><strong>Portrait &amp; appearance</strong><small>Add an image or choose a color for their card.</small></span><span class="optional-label">Optional</span></summary>
+              <div class="form-row appearance-row">
+                <label class="field avatar-field">Profile picture
+                  <span class="avatar-input-wrap"><input id="avatar" name="avatar" type="text" placeholder="Paste an image URL"><label class="upload-button" for="avatar-file" title="Upload a portrait">↑</label></span>
+                  <input id="avatar-file" class="visually-hidden" type="file" accept="image/*">
+                </label>
+                <label class="field cover-field">Cover image
+                  <span class="avatar-input-wrap"><input id="cover" name="cover" type="text" placeholder="Paste a cover image URL"><label class="upload-button" for="cover-file" title="Upload a cover image">↑</label></span>
+                  <input id="cover-file" class="visually-hidden" type="file" accept="image/*">
+                </label>
+                <label class="field accent-field">Card color
+                  <span class="color-control"><input id="accent" name="accent" type="color" value="#4385e8"><span>Choose color</span></span>
+                </label>
+              </div>
+            </details>
+
+            <details class="optional-section profile-extras" id="profile-extras">
+              <summary><span><strong>More profile sections</strong><small>Add gallery images, relationships, links, or a world.</small></span><span class="optional-label">Optional</span></summary>
+              <div class="profile-extra-fields">
+                <label class="field">More image URLs <span class="field-hint inline-hint">One URL per line</span>
+                  <textarea id="gallery" name="gallery" rows="2" maxlength="1000" placeholder="https://example.com/image.jpg"></textarea>
+                </label>
+                <label class="field">Relationships
+                  <textarea id="relations" name="relations" rows="2" maxlength="700" placeholder="Who matters to them? Add one relationship per line."></textarea>
+                </label>
+                <label class="field">Links
+                  <textarea id="links" name="links" rows="2" maxlength="700" placeholder="Add a URL, one per line."></textarea>
+                </label>
+                <label class="field">World or setting
+                  <textarea id="worlds" name="worlds" rows="2" maxlength="700" placeholder="Where does their story take place?"></textarea>
+                </label>
+                <label class="field">Extra stats <span class="field-hint inline-hint">One detail per line</span>
+                  <textarea id="stats" name="stats" rows="2" maxlength="700" placeholder="Occupation: Cartographer&#10;Likes: Old maps"></textarea>
+                </label>
+              </div>
+            </details>
+
+            <div class="form-actions">
+              <button class="button button-primary" type="submit"><span id="save-label">Save character</span><span aria-hidden="true">→</span></button>
+              <button class="button button-quiet" id="export-character" type="button">Export character</button>
+              <button class="button button-danger hidden" id="delete-character" type="button">Delete character</button>
+            </div>
+          </form>
+        </div>
+
+        <aside class="preview-column">
+          <div class="preview-heading"><p class="eyebrow">CHARACTER PREVIEW</p><span>UPDATES AS YOU WRITE</span></div>
+          <article class="profile-card" id="profile-preview" style="--card-accent: #4385e8">
+            <div class="card-art" id="preview-art">
+              <img class="cover-preview hidden" id="cover-preview" alt="Character cover preview">
+              <div class="art-orbit orbit-one"></div><div class="art-orbit orbit-two"></div>
+              <span class="art-star star-one">✳</span><span class="art-star star-two">✦</span>
+              <div class="portrait-placeholder" id="portrait-placeholder"><span>✳</span><small>YOUR CHARACTER</small></div>
+              <span class="card-index">NO. <span id="preview-index">01</span></span>
+            </div>
+            <div class="card-content">
+              <div class="preview-avatar-wrap" id="preview-avatar-wrap">
+                <img class="preview-avatar hidden" id="portrait-image" alt="Character profile picture preview">
+                <span class="preview-avatar-placeholder" id="preview-avatar-placeholder">✳</span>
+              </div>
+              <div class="card-kicker" id="preview-role">A STORY WAITING TO HAPPEN</div>
+              <h3 id="preview-name">Your character</h3>
+              <div class="card-meta"><span id="preview-pronouns">pronouns</span><i></i><span id="preview-age">age</span><i></i><span id="preview-species">species</span></div>
+              <p class="card-description" id="preview-description">Give them a name and a few details. Their profile will come together right here.</p>
+              <div class="trait-list" id="preview-traits"><span class="trait-placeholder">YOUR TRAITS</span></div>
+              <div class="card-bottom"><span>MADE OF STORIES</span><span class="card-sparkle">✳</span></div>
+            </div>
+          </article>
+          <p class="preview-caption">A little snapshot of who they are. <span>✦</span></p>
+        </aside>
+      </section>
+
+      <section class="cast-section" id="cast">
+        <div class="section-heading">
+          <div><p class="eyebrow">THE PEOPLE IN YOUR HEAD</p><h2>Your cast <span id="cast-total">(0)</span></h2></div>
+          <div class="cast-tools">
+            <div class="data-folder-control">
+              <button class="button button-quiet" id="connect-data-folder" type="button">Choose data folder</button>
+              <span class="data-folder-status" id="data-folder-status" role="status">Using this browser for autosave</span>
+              <span class="data-folder-help">Keeps a library backup file in a folder you choose.</span>
+            </div>
+            <label class="export-format">Export as
+              <select id="export-format" aria-label="Choose export format">
+                <option value="json">JSON</option>
+                <option value="csv">CSV</option>
+                <option value="txt">Text</option>
+              </select>
+            </label>
+            <button class="button button-quiet" id="export-library" type="button">Export all</button>
+            <button class="button button-quiet" id="import-library" type="button" title="Import a JSON or CSV backup">Import JSON/CSV</button>
+            <input class="visually-hidden" id="import-file" type="file" accept=".json,.csv,application/json,text/csv">
+            <label class="search-box"><span aria-hidden="true">⌕</span><input id="search-characters" type="search" placeholder="Find a character…" aria-label="Find a character"></label>
+          </div>
+        </div>
+        <div class="character-grid" id="character-grid"></div>
+        <div class="empty-state" id="empty-state">
+          <div class="empty-icon">✳</div><h3>Your story is a blank page.</h3><p>Make your first character and start filling it with possibility.</p>
+          <button class="button button-outline" id="empty-create" type="button">＋ Create your first character</button>
+        </div>
+      </section>
+      <footer class="page-footer"><span>FABLE STUDIO</span><span>Made for the characters who won't leave you alone. <b>✦</b></span></footer>
+    </main>
+  </div>
+  <button class="back-to-top" id="back-to-top" type="button" aria-label="Scroll back to top" title="Back to top">
+    <span aria-hidden="true">↑</span>
+  </button>
+  <dialog class="character-dialog" id="character-dialog" aria-labelledby="profile-name">
+    <div class="profile-window">
+      <div class="profile-window-toolbar">
+        <button class="profile-back" id="profile-back" type="button"><span aria-hidden="true">←</span> Back to characters</button>
+        <button class="profile-close" id="profile-close" type="button" aria-label="Close character profile">×</button>
+      </div>
+      <div class="profile-scroll">
+        <header class="full-profile-hero" id="full-profile-hero">
+          <img class="profile-cover-image hidden" id="profile-cover-image" alt="">
+          <div class="profile-hero-shade"></div>
+          <div class="profile-hero-content">
+            <div class="profile-avatar-wrap">
+              <img class="profile-avatar hidden" id="profile-avatar" alt="">
+              <span class="profile-avatar-placeholder" id="profile-avatar-placeholder">✳</span>
+            </div>
+            <p class="profile-role" id="profile-role"></p>
+            <h1 id="profile-name">Character name</h1>
+            <p class="profile-quote" id="profile-quote"></p>
+            <div class="profile-tag-list" id="profile-tags"></div>
+            <button class="button profile-edit-button" id="profile-edit" type="button">Edit this character</button>
+            <button class="button profile-edit-button" id="profile-print" type="button">Print / Save PDF</button>
+          </div>
+        </header>
+        <nav class="profile-sections" aria-label="Character profile sections">
+          <details class="profile-section" open>
+            <summary>About <span class="profile-section-icon">⌄</span></summary>
+            <div class="profile-section-content">
+              <p class="profile-about" id="profile-about"></p>
+              <div class="profile-story-block hidden" id="profile-story-block"><h3>Background</h3><p id="profile-story"></p></div>
+            </div>
+          </details>
+          <details class="profile-section">
+            <summary>Images <span class="profile-section-icon">⌄</span></summary>
+            <div class="profile-section-content"><div class="profile-gallery" id="profile-gallery"></div><p class="profile-empty hidden" id="profile-gallery-empty">No extra images yet. Add image URLs in the profile editor.</p></div>
+          </details>
+          <details class="profile-section">
+            <summary>Stats <span class="profile-section-icon">⌄</span></summary>
+            <div class="profile-section-content"><div class="profile-stats" id="profile-stats"></div></div>
+          </details>
+          <details class="profile-section">
+            <summary>Relations <span class="profile-section-icon">⌄</span></summary>
+            <div class="profile-section-content"><p id="profile-relations"></p></div>
+          </details>
+          <details class="profile-section">
+            <summary>Links <span class="profile-section-icon">⌄</span></summary>
+            <div class="profile-section-content"><div class="profile-links" id="profile-links"></div></div>
+          </details>
+          <details class="profile-section">
+            <summary>Worlds <span class="profile-section-icon">⌄</span></summary>
+            <div class="profile-section-content"><p id="profile-worlds"></p></div>
+          </details>
+        </nav>
+      </div>
+    </div>
+  </dialog>
+  <dialog class="confirm-dialog" id="delete-dialog" aria-labelledby="delete-dialog-title" aria-describedby="delete-dialog-message">
+    <div class="confirm-dialog-content">
+      <span class="confirm-dialog-icon" aria-hidden="true">!</span>
+      <h2 id="delete-dialog-title">Delete character?</h2>
+      <p id="delete-dialog-message"></p>
+      <div class="confirm-dialog-actions">
+        <button class="button button-quiet" id="cancel-delete" type="button">Keep character</button>
+        <button class="button button-danger" id="confirm-delete" type="button">Delete character</button>
+      </div>
+    </div>
+  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
