@@ -252,40 +252,69 @@ function updatePreview() {
 
 function renderCharacters() {
   const query = document.querySelector('#search-characters').value.trim().toLowerCase();
-  const filtered = characters.filter((character) => [character.name, character.role, ...(character.traits || [])].join(' ').toLowerCase().includes(query));
+  const filtered = characters.filter((character) => [
+    character.name,
+    character.role,
+    character.species,
+    character.description,
+    ...(character.traits || []),
+  ].join(' ').toLowerCase().includes(query));
   characterGrid.replaceChildren();
   filtered.forEach((character) => {
     const card = document.createElement('button');
     card.className = 'cast-card';
     card.type = 'button';
     card.style.setProperty('--thumb-accent', character.accent || '#4385e8');
-    card.setAttribute('aria-label', `View profile for ${character.name}`);
+    card.setAttribute('aria-label', `View profile for ${character.name}${character.role ? `, ${character.role}` : ''}`);
     card.title = [character.name, character.role, character.description].filter(Boolean).join(' — ');
 
     const thumb = document.createElement('span');
     thumb.className = 'cast-thumb';
+    const initial = document.createElement('span');
+    initial.className = 'cast-initial';
+    initial.textContent = (character.name || '?').slice(0, 1).toUpperCase();
+    thumb.append(initial);
     if (character.avatar) {
       const image = document.createElement('img');
       image.src = character.avatar;
       image.alt = '';
+      image.loading = 'lazy';
+      image.addEventListener('error', () => {
+        image.remove();
+        thumb.classList.add('has-failed-image');
+      }, { once: true });
       thumb.append(image);
-    } else {
-      thumb.textContent = (character.name || '?').slice(0, 1).toUpperCase();
     }
 
     const info = document.createElement('span');
     info.className = 'cast-info';
     const name = document.createElement('h3');
     name.textContent = character.name;
-    const heading = document.createElement('p');
+    const heading = document.createElement('span');
+    heading.className = 'cast-role';
     heading.textContent = character.role || character.species || 'A character in your story';
+    const description = document.createElement('span');
+    description.className = 'cast-description';
+    description.textContent = character.description || 'Their story is just beginning.';
     const traits = document.createElement('span');
     traits.className = 'cast-traits';
-    traits.textContent = (character.traits || []).slice(0, 2).join('  ·  ');
-    info.append(name, heading, traits);
+    const visibleTraits = (character.traits || []).slice(0, 3);
+    if (visibleTraits.length) {
+      visibleTraits.forEach((trait) => {
+        const chip = document.createElement('span');
+        chip.textContent = trait;
+        traits.append(chip);
+      });
+    }
+    const viewProfile = document.createElement('span');
+    viewProfile.className = 'cast-view-profile';
+    viewProfile.textContent = 'View profile';
     const arrow = document.createElement('span');
     arrow.className = 'cast-arrow';
     arrow.textContent = '↗';
+    info.append(name, heading, description);
+    if (visibleTraits.length) info.append(traits);
+    info.append(viewProfile);
     card.append(thumb, info, arrow);
     card.addEventListener('click', () => openCharacterProfile(character, card));
     characterGrid.append(card);
@@ -301,7 +330,7 @@ function renderCharacters() {
     emptyState.querySelector('button').classList.add('hidden');
   } else {
     emptyState.querySelector('h3').textContent = 'Your story is a blank page.';
-    emptyState.querySelector('p').textContent = 'Make your first character and start filling it with possibility.';
+    emptyState.querySelector('p').textContent = 'Create a character to see their card and profile details here.';
     emptyState.querySelector('button').classList.remove('hidden');
   }
 }
@@ -904,12 +933,44 @@ document.querySelector('#confirm-delete').addEventListener('click', () => {
 document.querySelector('#search-characters').addEventListener('input', renderCharacters);
 ['new-character', 'sidebar-new', 'empty-create'].forEach((id) => document.getElementById(id).addEventListener('click', resetForm));
 
-document.querySelectorAll('.nav-link').forEach((link) => link.addEventListener('click', (event) => {
+const navLinks = [...document.querySelectorAll('.nav-link')];
+const cardsSection = document.querySelector('#cast');
+let scrollSpyFrame = 0;
+
+function setActiveNavigation(sectionId) {
+  navLinks.forEach((link) => {
+    const isActive = link.getAttribute('href') === `#${sectionId}`;
+    link.classList.toggle('active', isActive);
+    if (isActive) link.setAttribute('aria-current', 'location');
+    else link.removeAttribute('aria-current');
+  });
+}
+
+function syncNavigationToScroll() {
+  scrollSpyFrame = 0;
+  const header = document.querySelector('.sidebar');
+  const sectionThreshold = Math.max(
+    (header?.getBoundingClientRect().bottom || 0) + Math.min(120, window.innerHeight * 0.2),
+    window.innerHeight * 0.55,
+  );
+  setActiveNavigation(cardsSection.getBoundingClientRect().top <= sectionThreshold ? 'cast' : 'studio');
+}
+
+function scheduleNavigationSync() {
+  if (scrollSpyFrame) return;
+  scrollSpyFrame = window.requestAnimationFrame(syncNavigationToScroll);
+}
+
+navLinks.forEach((link) => link.addEventListener('click', (event) => {
   event.preventDefault();
-  document.querySelectorAll('.nav-link').forEach((item) => item.classList.remove('active'));
-  link.classList.add('active');
-  document.querySelector(link.getAttribute('href')).scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const target = document.querySelector(link.getAttribute('href'));
+  if (!target) return;
+  setActiveNavigation(target.id);
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }));
+window.addEventListener('scroll', scheduleNavigationSync, { passive: true });
+window.addEventListener('resize', scheduleNavigationSync);
+syncNavigationToScroll();
 
 const savedDraft = readStorage(DRAFT_KEY, null);
 if (savedDraft) {
