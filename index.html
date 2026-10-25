@@ -7,8 +7,7 @@
   <title>Fable — Character Studio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;500;600;700&family=Cormorant+Garamond:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&family=Lato:wght@400;700&family=Libre+Baskerville:wght@400;700&family=Lora:wght@400;500;600;700&family=Merriweather:wght@400;700&family=Nunito+Sans:wght@400;600;700&family=Playfair+Display:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&family=Roboto+Slab:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <script src="script.js" defer></script>
 </head>
@@ -24,6 +23,7 @@
       <nav class="side-nav" aria-label="Main navigation">
         <a class="nav-link active" href="#studio"><span class="nav-icon">✳</span> Character studio</a>
         <a class="nav-link" href="#cast"><span class="nav-icon">▦</span> Character cards <span class="nav-count" id="sidebar-count">0</span></a>
+        <a class="nav-link" href="#lore"><span class="nav-icon">✧</span> Lore &amp; story <span class="nav-count" id="story-sidebar-count">0</span></a>
       </nav>
 
       <div class="sidebar-note">
@@ -49,35 +49,26 @@
           <div class="landing-actions">
             <a class="button button-primary" href="#studio">Create your character <span aria-hidden="true">→</span></a>
             <a class="landing-link" href="#cast">Explore your cast <span aria-hidden="true">↓</span></a>
+            <button class="landing-link about-trigger" id="about-website" type="button">About the Website <span aria-hidden="true">↗</span></button>
           </div>
           <p class="privacy-note"><span class="status-dot"></span> Your characters stay in this browser, on this device.</p>
         </div>
         <div class="intro-doodle" aria-hidden="true"><span>✳</span><i></i></div>
-        <aside class="preview-column" aria-label="Live character profile preview">
-          <div class="preview-heading"><p class="eyebrow">A GLIMPSE INTO THEIR WORLD</p><span>LIVE PROFILE PREVIEW</span></div>
-          <article class="profile-card" id="profile-preview" style="--card-accent: #4385e8">
-            <div class="card-art" id="preview-art">
-              <img class="cover-preview hidden" id="cover-preview" alt="Character cover preview">
-              <div class="art-orbit orbit-one"></div><div class="art-orbit orbit-two"></div>
-              <span class="art-star star-one">✳</span><span class="art-star star-two">✦</span>
-              <div class="portrait-placeholder" id="portrait-placeholder"><span>✳</span><small>YOUR CHARACTER</small></div>
-              <span class="card-index">NO. <span id="preview-index">01</span></span>
-            </div>
-            <div class="card-content">
-              <div class="preview-avatar-wrap" id="preview-avatar-wrap">
-                <img class="preview-avatar hidden" id="portrait-image" alt="Character profile picture preview">
-                <span class="preview-avatar-placeholder" id="preview-avatar-placeholder">✳</span>
-              </div>
-              <div class="card-kicker" id="preview-role">A STORY WAITING TO HAPPEN</div>
-              <h3 id="preview-name">Your character</h3>
-              <div class="card-meta"><span id="preview-pronouns">pronouns</span><i></i><span id="preview-age">age</span><i></i><span id="preview-species">species</span></div>
-              <p class="card-description" id="preview-description">Give them a name and a few details. Their profile will come together right here.</p>
-              <div class="trait-list" id="preview-traits"><span class="trait-placeholder">YOUR TRAITS</span></div>
-              <div class="card-bottom"><span>MADE OF STORIES</span><span class="card-sparkle">✳</span></div>
-            </div>
-          </article>
-          <p class="preview-caption">A little snapshot of who they are. <span>✦</span></p>
-        </aside>
+      </section>
+
+      <section class="creation-steps" aria-label="Three parts of a character profile">
+        <article class="creation-step">
+          <span class="creation-step-number">01</span>
+          <div><p class="eyebrow">THE FOUNDATION</p><h2>Start with the basics</h2><p>Name, role, pronouns, age, and species give your character a place in the world.</p></div>
+        </article>
+        <article class="creation-step">
+          <span class="creation-step-number">02</span>
+          <div><p class="eyebrow">THE LITTLE DETAILS</p><h2>Show their personality</h2><p>Add a quick description and a few traits to make their voice and nature shine through.</p></div>
+        </article>
+        <article class="creation-step">
+          <span class="creation-step-number">03</span>
+          <div><p class="eyebrow">THE BIGGER STORY</p><h2>Build their background</h2><p>Write their backstory, then add images, relationships, and world details whenever you like.</p></div>
+        </article>
       </section>
 
       <section class="studio-section" id="studio">
@@ -140,18 +131,23 @@
             </fieldset>
 
             <details class="optional-section" id="appearance-details">
-              <summary><span><strong>Portrait &amp; appearance</strong><small>Add an image or choose a color for their card.</small></span><span class="optional-label">Optional</span></summary>
+              <summary><span><strong>Portrait &amp; appearance</strong><small>Set a profile color, add image links or upload images up to 5 MB, then crop and zoom.</small></span><span class="optional-label">Optional</span></summary>
               <div class="form-row appearance-row">
-                <label class="field avatar-field">Profile picture
-                  <span class="avatar-input-wrap"><input id="avatar" name="avatar" type="text" placeholder="Paste an image URL"><label class="upload-button" for="avatar-file" title="Upload a portrait">↑</label></span>
-                  <input id="avatar-file" class="visually-hidden" type="file" accept="image/*">
-                </label>
-                <label class="field cover-field">Cover image
-                  <span class="avatar-input-wrap"><input id="cover" name="cover" type="text" placeholder="Paste a cover image URL"><label class="upload-button" for="cover-file" title="Upload a cover image">↑</label></span>
-                  <input id="cover-file" class="visually-hidden" type="file" accept="image/*">
-                </label>
-                <label class="field accent-field">Card color
-                  <span class="color-control"><input id="accent" name="accent" type="color" value="#4385e8"><span>Choose color</span></span>
+                <div class="field avatar-field">
+                  <label for="avatar">Profile picture</label>
+                  <span class="avatar-input-wrap"><input id="avatar" name="avatar" type="text" placeholder="Direct image URL (https://…)"><button class="upload-button" id="select-avatar-file" type="button" title="Upload a portrait" aria-label="Upload a portrait">↑</button><button class="upload-button crop-button" id="edit-avatar-crop" type="button" title="Crop or zoom portrait" aria-label="Crop or zoom portrait">✂</button></span>
+                  <input id="avatar-file" class="visually-hidden" type="file" accept="image/*" tabindex="-1">
+                </div>
+                <div class="field cover-field">
+                  <label for="cover">Cover image</label>
+                  <span class="avatar-input-wrap"><input id="cover" name="cover" type="text" placeholder="Direct image URL (https://…)"><button class="upload-button" id="select-cover-file" type="button" title="Upload a cover image" aria-label="Upload a cover image">↑</button><button class="upload-button crop-button" id="edit-cover-crop" type="button" title="Crop or zoom cover" aria-label="Crop or zoom cover">✂</button></span>
+                  <input id="cover-file" class="visually-hidden" type="file" accept="image/*" tabindex="-1">
+                </div>
+                <label class="field accent-field">Profile background
+                  <span class="color-control">
+                    <input id="accent-hex" type="text" value="#4385e8" maxlength="7" pattern="#[0-9A-Fa-f]{6}" placeholder="#4385e8" aria-label="Profile background HEX color">
+                    <input id="accent" name="accent" type="color" value="#4385e8" aria-label="Choose profile background color">
+                  </span>
                 </label>
               </div>
             </details>
@@ -159,9 +155,14 @@
             <details class="optional-section profile-extras" id="profile-extras">
               <summary><span><strong>More profile sections</strong><small>Add gallery images, relationships, links, or a world.</small></span><span class="optional-label">Optional</span></summary>
               <div class="profile-extra-fields">
-                <label class="field">More image URLs <span class="field-hint inline-hint">One URL per line</span>
-                  <textarea id="gallery" name="gallery" rows="2" maxlength="1000" placeholder="https://example.com/image.jpg"></textarea>
-                </label>
+                <div class="field gallery-field">
+                  <label for="gallery">More images <span class="field-hint inline-hint">Paste direct image links, one per line, or upload images.</span></label>
+                  <span class="avatar-input-wrap gallery-input-wrap">
+                    <textarea id="gallery" name="gallery" rows="3" maxlength="20000000" placeholder="https://example.com/image.jpg"></textarea>
+                    <button class="upload-button" id="select-gallery-files" type="button" title="Upload extra profile images" aria-label="Upload extra profile images">↑</button>
+                  </span>
+                  <input id="gallery-files" class="visually-hidden" type="file" accept="image/*" multiple tabindex="-1">
+                </div>
                 <label class="field">Relationships
                   <textarea id="relations" name="relations" rows="2" maxlength="700" placeholder="Who matters to them? Add one relationship per line."></textarea>
                 </label>
@@ -184,7 +185,31 @@
             </div>
           </form>
         </div>
-
+        <aside class="preview-column" aria-label="Live character profile preview">
+          <div class="preview-heading"><p class="eyebrow">A GLIMPSE INTO THEIR WORLD</p><span>LIVE PROFILE PREVIEW</span></div>
+          <article class="profile-card" id="profile-preview" style="--card-accent: #4385e8">
+            <div class="card-art" id="preview-art">
+              <img class="cover-preview hidden" id="cover-preview" alt="Character cover preview">
+              <div class="art-orbit orbit-one"></div><div class="art-orbit orbit-two"></div>
+              <span class="art-star star-one">✳</span><span class="art-star star-two">✦</span>
+              <div class="portrait-placeholder" id="portrait-placeholder"><span>✳</span><small>YOUR CHARACTER</small></div>
+              <span class="card-index">NO. <span id="preview-index">01</span></span>
+            </div>
+            <div class="card-content">
+              <div class="preview-avatar-wrap" id="preview-avatar-wrap">
+                <img class="preview-avatar hidden" id="portrait-image" alt="Character profile picture preview">
+                <span class="preview-avatar-placeholder" id="preview-avatar-placeholder">✳</span>
+              </div>
+              <div class="card-kicker" id="preview-role">A STORY WAITING TO HAPPEN</div>
+              <h3 id="preview-name">Your character</h3>
+              <div class="card-meta"><span id="preview-pronouns">pronouns</span><i></i><span id="preview-age">age</span><i></i><span id="preview-species">species</span></div>
+              <p class="card-description" id="preview-description">Give them a name and a few details. Their profile will come together right here.</p>
+              <div class="trait-list" id="preview-traits"><span class="trait-placeholder">YOUR TRAITS</span></div>
+              <div class="card-bottom"><span>MADE OF STORIES</span><span class="card-sparkle">✳</span></div>
+            </div>
+          </article>
+          <p class="preview-caption">A little snapshot of who they are. <span>✦</span></p>
+        </aside>
       </section>
       </section>
 
@@ -200,13 +225,14 @@
             <label class="export-format">Export as
               <select id="export-format" aria-label="Choose export format">
                 <option value="json">JSON</option>
+                <option value="yaml">YAML</option>
                 <option value="csv">CSV</option>
                 <option value="txt">Text</option>
               </select>
             </label>
             <button class="button button-quiet" id="export-library" type="button">Export all</button>
-            <button class="button button-quiet" id="import-library" type="button" title="Import a JSON or CSV backup">Import JSON/CSV</button>
-            <input class="visually-hidden" id="import-file" type="file" accept=".json,.csv,application/json,text/csv">
+            <button class="button button-quiet" id="import-library" type="button" title="Import a JSON, YAML, or CSV backup">Import file</button>
+            <input class="visually-hidden" id="import-file" type="file" accept=".json,.yaml,.yml,.csv,application/json,text/yaml,text/csv">
             <label class="search-box"><span aria-hidden="true">⌕</span><input id="search-characters" type="search" placeholder="Find a character…" aria-label="Find a character"></label>
           </div>
         </div>
@@ -214,6 +240,34 @@
         <div class="empty-state" id="empty-state">
           <div class="empty-icon">✳</div><h3>Your story is a blank page.</h3><p>Create a character to see their card and profile details here.</p>
           <button class="button button-outline" id="empty-create" type="button">＋ Create your first character</button>
+        </div>
+      </section>
+      <section class="lore-section" id="lore" aria-labelledby="lore-title">
+        <div class="section-heading lore-heading">
+          <div><p class="eyebrow">WRITE IT YOUR WAY</p><h2 id="lore-title">Lore &amp; Story <span id="lore-count">(0)</span></h2></div>
+          <div class="lore-heading-actions">
+            <button class="button button-primary" id="new-story" type="button"><span>＋</span> New story</button>
+            <button class="button button-outline story-preview-open" id="story-preview-open" type="button">Open full preview <span aria-hidden="true">↗</span></button>
+          </div>
+        </div>
+        <p class="lore-intro">Start with a note, a scene, or a whole story. There’s no set format.</p>
+        <div class="story-library-tools">
+          <label class="export-format">Export as
+            <select id="story-export-format" aria-label="Choose story export format">
+              <option value="json">JSON</option>
+              <option value="yaml">YAML</option>
+            </select>
+          </label>
+          <button class="button button-quiet" id="story-export" type="button">Export stories &amp; drafts</button>
+          <button class="button button-quiet" id="story-import" type="button">Import file</button>
+          <input class="visually-hidden" id="story-import-file" type="file" accept=".json,.yaml,.yml,application/json,text/yaml">
+        </div>
+        <div class="story-library" id="story-library" aria-live="polite"></div>
+        <div class="story-empty" id="story-empty">
+          <div class="empty-icon">✧</div>
+          <h3>Your stories can start anywhere.</h3>
+          <p>Write a first idea or build a whole world—use as much or as little detail as you like.</p>
+          <button class="button button-outline" id="story-empty-create" type="button">＋ Write your first story</button>
         </div>
       </section>
       <footer class="page-footer"><span>FABLE STUDIO</span><span>Made for the characters who won't leave you alone. <b>✦</b></span></footer>
@@ -237,8 +291,8 @@
               <img class="profile-avatar hidden" id="profile-avatar" alt="">
               <span class="profile-avatar-placeholder" id="profile-avatar-placeholder">✳</span>
             </div>
-            <p class="profile-role" id="profile-role"></p>
             <h1 id="profile-name">Character name</h1>
+            <p class="profile-role" id="profile-role"></p>
             <p class="profile-quote" id="profile-quote"></p>
             <div class="profile-tag-list" id="profile-tags"></div>
             <button class="button profile-edit-button" id="profile-edit" type="button">Edit this character</button>
@@ -277,6 +331,152 @@
       </div>
     </div>
   </dialog>
+  <dialog class="character-dialog story-dialog" id="story-dialog" aria-labelledby="story-editor-title">
+    <div class="profile-window story-window">
+      <div class="profile-window-toolbar story-toolbar">
+        <button class="profile-back hidden" id="story-back-to-draft" type="button"><span aria-hidden="true">←</span> Back to Draft</button>
+        <span class="story-save-status" id="story-save-status" role="status">Draft autosaves here</span>
+        <button class="profile-close" id="story-close" type="button" aria-label="Close story editor">×</button>
+      </div>
+      <form class="story-editor" id="story-form">
+        <div class="story-editor-heading">
+          <p class="eyebrow">YOUR STORY, YOUR WAY</p>
+          <h1 id="story-editor-title">Write a story</h1>
+          <p>Start anywhere. Add a title and write whatever you like—ideas, scenes, or a complete story.</p>
+        </div>
+        <label class="story-title-label" for="story-title">Story title</label>
+        <input class="story-title-input" id="story-title" name="title" type="text" maxlength="100" placeholder="Give your story a name" required>
+        <label class="story-text-label" for="story-text">Your story</label>
+        <textarea class="story-text-input" id="story-text" name="text" maxlength="30000" placeholder="Write anything you like. There are no required steps or sections."></textarea>
+        <details class="story-style-settings" id="story-style-settings">
+          <summary>Story appearance <span>Optional</span></summary>
+          <div class="story-style-grid">
+            <label for="story-title-font">Title font
+              <select id="story-title-font" name="titleFont">
+                <option value="playfair">Playfair Display · Elegant</option>
+                <option value="lora">Lora · Literary</option>
+                <option value="merriweather">Merriweather · Readable</option>
+                <option value="cormorant">Cormorant Garamond · Graceful</option>
+                <option value="libre-baskerville">Libre Baskerville · Classic</option>
+                <option value="roboto-slab">Roboto Slab · Bold</option>
+                <option value="dm-sans">DM Sans · Modern</option>
+                <option value="lato">Lato · Warm</option>
+                <option value="nunito-sans">Nunito Sans · Friendly</option>
+                <option value="caveat">Caveat · Handwritten</option>
+                <option value="roboto-mono">Roboto Mono · Typewriter</option>
+                <option value="georgia">Georgia · System serif</option>
+                <option value="courier">Courier New · System mono</option>
+              </select>
+            </label>
+            <label for="story-body-font">Body font
+              <select id="story-body-font" name="bodyFont">
+                <option value="dm-sans">DM Sans · Modern</option>
+                <option value="lato">Lato · Warm</option>
+                <option value="nunito-sans">Nunito Sans · Friendly</option>
+                <option value="lora">Lora · Literary</option>
+                <option value="merriweather">Merriweather · Readable</option>
+                <option value="roboto-slab">Roboto Slab · Soft slab</option>
+                <option value="libre-baskerville">Libre Baskerville · Classic</option>
+                <option value="cormorant">Cormorant Garamond · Graceful</option>
+                <option value="playfair">Playfair Display · Elegant</option>
+                <option value="caveat">Caveat · Handwritten</option>
+                <option value="roboto-mono">Roboto Mono · Typewriter</option>
+                <option value="georgia">Georgia · System serif</option>
+                <option value="courier">Courier New · System mono</option>
+              </select>
+            </label>
+            <div class="story-background-field">
+              <label for="story-background-hex">Reader background</label>
+              <span class="color-control">
+                <input id="story-background-hex" type="text" value="#fbfdff" maxlength="7" pattern="#[0-9A-Fa-f]{6}" placeholder="#fbfdff" aria-label="Reader background HEX color">
+                <input id="story-background" name="backgroundColor" type="color" value="#fbfdff" aria-label="Choose reader background color">
+              </span>
+            </div>
+            <div class="story-cover-field">
+              <label for="story-image-url">Cover image URL</label>
+              <span class="story-image-control">
+                <input id="story-image-url" name="image" type="text" placeholder="Paste a direct image link">
+                <button class="upload-button" id="story-image-upload-button" type="button" aria-label="Upload a cover image">↑</button>
+              </span>
+            </div>
+            <input class="visually-hidden" id="story-image-file" type="file" accept="image/*" tabindex="-1">
+            <p class="story-style-hint">Choose a font for each part, set the reader background, and add a cover image by link or upload (up to 5 MB).</p>
+          </div>
+        </details>
+        <div class="story-editor-actions">
+          <span>Unfinished drafts are saved here automatically.</span>
+          <div class="story-editor-buttons">
+            <button class="button button-outline" id="story-editor-preview" type="button">Open full preview <span aria-hidden="true">↗</span></button>
+            <button class="button button-primary" type="submit">Save story</button>
+          </div>
+        </div>
+      </form>
+      <div class="story-reading-view hidden" id="story-reading-view">
+        <div class="story-reading-cover hidden" id="story-reading-cover-wrap">
+          <img id="story-reading-cover" alt="">
+        </div>
+        <article class="story-reading-copy">
+          <p class="eyebrow">STORY PREVIEW</p>
+          <h1 id="story-reading-title">Your story title</h1>
+          <p id="story-reading-text"></p>
+          <button class="button button-primary" id="story-preview-edit" type="button">Edit this story</button>
+          <button class="button button-outline story-print-button" id="story-print" type="button">Print / Save PDF</button>
+        </article>
+      </div>
+    </div>
+  </dialog>
+  <dialog class="character-dialog about-dialog" id="about-dialog" aria-labelledby="about-title">
+    <div class="profile-window">
+      <div class="profile-window-toolbar">
+        <span class="about-toolbar-label">FABLE STUDIO GUIDE</span>
+        <button class="profile-close" id="about-close" type="button" aria-label="Close website guide">×</button>
+      </div>
+      <div class="profile-scroll about-scroll">
+        <header class="about-hero">
+          <p class="profile-role">A QUICK TOUR</p>
+          <h1 id="about-title">A home for your stories.</h1>
+          <p>Fable helps you shape original characters, see their profile take form, and keep your cast together in one private place.</p>
+        </header>
+        <div class="about-guide-layout">
+          <nav class="about-navigation" aria-label="Website guide sections">
+            <p class="eyebrow">IN THIS GUIDE</p>
+            <a href="#about-step-create">01 <span>Create a character</span></a>
+            <a href="#about-step-cards">02 <span>Character Cards</span></a>
+            <a href="#about-step-stories">03 <span>Lore &amp; Story</span></a>
+            <a href="#about-step-pdf">04 <span>Save as PDF</span></a>
+            <a href="#about-step-export">05 <span>Export your work</span></a>
+            <a href="#about-step-import">06 <span>Import a backup</span></a>
+          </nav>
+          <div class="about-guide-content">
+            <section class="about-guide-step" id="about-step-create">
+              <span class="creation-step-number">01</span>
+              <div><h2>Create a character</h2><p>Choose <strong>New character</strong> and add a name. Fill in any other details you like—your preview updates as you type. Choose <strong>Save character</strong> when you’re ready. You can return and edit it later.</p></div>
+            </section>
+            <section class="about-guide-step" id="about-step-cards">
+              <span class="creation-step-number">02</span>
+              <div><h2>Find and open Character Cards</h2><p>Scroll to <strong>Character Cards</strong> or use the side menu. Select a card to open the full profile. Use search to find a character; choose <strong>Edit</strong> in the profile to make changes. Your characters are saved in this browser.</p></div>
+            </section>
+            <section class="about-guide-step" id="about-step-stories">
+              <span class="creation-step-number">03</span>
+              <div><h2>Write and open Lore &amp; Story</h2><p>Choose <strong>New story</strong>, then write a title and any text you want. Your draft autosaves as you work; choose <strong>Save story</strong> to add it to your story list. Select a story card to edit it. Use the preview below the list, then choose <strong>Open full preview</strong> to read it in a floating window.</p></div>
+            </section>
+            <section class="about-guide-step" id="about-step-pdf">
+              <span class="creation-step-number">04</span>
+              <div><h2>Save a character or story as PDF</h2><p>Open a character profile or a story’s full preview, then choose <strong>Print / Save PDF</strong>. In the print window, select <strong>Save as PDF</strong> as the printer and save the file. The PDF is a readable copy; it does not replace your saved work.</p></div>
+            </section>
+            <section class="about-guide-step" id="about-step-export">
+              <span class="creation-step-number">05</span>
+              <div><h2>Export a backup</h2><p>In <strong>Character Cards</strong>, choose a format and select <strong>Export all</strong>. JSON and YAML keep the character details; CSV and Text are handy for lists or reading. In <strong>Lore &amp; Story</strong>, choose JSON or YAML, then select <strong>Export stories &amp; drafts</strong>. This backup includes saved stories and unfinished drafts.</p></div>
+            </section>
+            <section class="about-guide-step" id="about-step-import">
+              <span class="creation-step-number">06</span>
+              <div><h2>Import a backup</h2><p>Choose <strong>Import file</strong> in Character Cards or Lore &amp; Story, then select a JSON or YAML backup (Character Cards also accepts CSV). New items are added; an item already in your library is updated. Keep your backup file somewhere safe.</p></div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+  </dialog>
   <dialog class="confirm-dialog" id="delete-dialog" aria-labelledby="delete-dialog-title" aria-describedby="delete-dialog-message">
     <div class="confirm-dialog-content">
       <span class="confirm-dialog-icon" aria-hidden="true">!</span>
@@ -287,6 +487,30 @@
         <button class="button button-danger" id="confirm-delete" type="button">Delete character</button>
       </div>
     </div>
+  </dialog>
+  <dialog class="image-crop-dialog" id="image-crop-dialog" aria-labelledby="image-crop-title">
+    <form class="image-crop-content" method="dialog">
+      <header class="image-crop-heading">
+        <div><p class="eyebrow">IMAGE ADJUSTMENT</p><h2 id="image-crop-title">Crop your image</h2></div>
+        <button class="profile-close image-crop-close" id="cancel-image-crop" type="button" aria-label="Cancel image adjustment">×</button>
+      </header>
+      <p class="image-crop-help">Drag the image or use the position sliders to frame it, then adjust the zoom. Your original image stays unchanged.</p>
+      <div class="image-crop-frame" id="image-crop-frame">
+        <img id="image-crop-preview" alt="Image crop preview">
+      </div>
+      <div class="image-position-controls">
+        <label for="image-crop-x">Left / right<input id="image-crop-x" type="range" min="0" max="0" step="0.1" value="0"></label>
+        <label for="image-crop-y">Up / down<input id="image-crop-y" type="range" min="0" max="0" step="0.1" value="0"></label>
+      </div>
+      <label class="image-zoom-control" for="image-crop-zoom">
+        <span>Zoom</span><input id="image-crop-zoom" type="range" min="1" max="3" step="0.01" value="1">
+        <output id="image-crop-zoom-value" for="image-crop-zoom">1.0×</output>
+      </label>
+      <div class="image-crop-actions">
+        <button class="button button-quiet" id="cancel-image-crop-action" type="button">Cancel</button>
+        <button class="button button-primary" id="confirm-image-crop" type="button">Use this image</button>
+      </div>
+    </form>
   </dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 </body>
