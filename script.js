@@ -56,6 +56,7 @@ const CHANGELOG = [
       'Images: uploaded profile pictures, covers, story covers and extra images now show as thumbnails with a Remove button, instead of a block of raw text. Extra images can also be added by link.',
       'Fixed: deleting a story now removes it completely in one step, instead of leaving a leftover card.',
       'Fixed: editing a character with a portrait but no cover no longer copies the portrait into the cover.',
+      'About the Website: rewrote the guide in simpler words, removed the side menu, and restyled it to match the rest of the site.',
       'Added this changelog.',
     ],
   },
@@ -2725,7 +2726,7 @@ function renderChangelog() {
     const notes = document.createElement('ul');
     entry.notes.forEach((note) => {
       const item = document.createElement('li');
-      const match = note.match(/^(Lore & Story|Characters|Fixed|Added)(:|\b)/);
+      const match = note.match(/^(Lore & Story|Characters|Images|Fixed|Added)(:|\b)/);
       if (match && match[2] === ':') {
         const label = document.createElement('strong');
         label.textContent = `${match[1]}:`;
