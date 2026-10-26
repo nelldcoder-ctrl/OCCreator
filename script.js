@@ -19,6 +19,7 @@ const coverPreview = document.querySelector('#cover-preview');
 const previewAvatarPlaceholder = document.querySelector('#preview-avatar-placeholder');
 const characterDialog = document.querySelector('#character-dialog');
 const aboutDialog = document.querySelector('#about-dialog');
+const changelogDialog = document.querySelector('#changelog-dialog');
 const deleteDialog = document.querySelector('#delete-dialog');
 const imageCropDialog = document.querySelector('#image-crop-dialog');
 let printSectionState = null;
@@ -33,6 +34,54 @@ let profileCloseTimer = null;
 let profileAfterClose = null;
 let aboutCloseTimer = null;
 let aboutReturnFocus = null;
+let changelogCloseTimer = null;
+let changelogReturnFocus = null;
+
+// Add new releases at the top, using the same fields: version, date, notes.
+const CHANGELOG = [
+  {
+    version: '0.2.5',
+    date: '2026/10/26',
+    notes: [
+      'Lore & Story: link stories to your characters, and see every story a character appears in on their profile.',
+      'Lore & Story: added type, progress, a one-line summary, setting and tags to each story, plus a live word count and reading time.',
+      'Lore & Story: split long stories into chapters with a chapters panel (jump and reorder), and format text with bold, italic, quotes and scene breaks. The reader shows it all, with a contents list.',
+      'Lore & Story: added version history, undo and redo, Discard changes, Save & close, and starter prompts for scenes, world notes and plot outlines.',
+      'Lore & Story: search, filter and sort your story library, export stories as Markdown or plain text, and cover images are now resized on upload to save browser storage.',
+      'Characters: link characters to each other with Connections, shown on both profiles.',
+      'Characters: added a Go deeper section (goal, fear, secret, flaw, voice, appearance) and a life timeline.',
+      'Characters: added groups or factions with cast filtering and sorting, a Duplicate button, a profile completeness bar, and “Need a nudge?” writing prompts.',
+      'Characters: added version history with Restore, and raised the backstory limit to 4,000 characters with a counter.',
+      'Characters: starting a new character now asks before discarding unsaved changes.',
+      'Images: uploaded profile pictures, covers, story covers and extra images now show as thumbnails with a Remove button, instead of a block of raw text. Extra images can also be added by link.',
+      'Fixed: deleting a story now removes it completely in one step, instead of leaving a leftover card.',
+      'Fixed: editing a character with a portrait but no cover no longer copies the portrait into the cover.',
+      'Added this changelog.',
+    ],
+  },
+  {
+    version: '0.2.0',
+    date: '2026-10-25',
+    notes: [
+      'Added Lore&Story (Simple Story writing)',
+      'Create a story with customized and personalized draft craft. NOTE! The style is limited.',
+      'Changed functionality of some features',
+      'Changed UI layout of Character Creation',
+      'Changed how Profile colors functioned',
+      'Fixed some details that were difficult to read and redefined them.',
+      'Other new features to be added in future updates.',
+    ],
+  },
+  {
+    version: '0.1.0',
+    date: '2026-10-24',
+    notes: [
+      'Redesigned the whole page into simplicity',
+      'Added Landing page - divided into Character Studio and Character Cards',
+      'Changed the UI of “Created Characters”',
+    ],
+  },
+];
 let pendingDeleteId = '';
 let pendingDeleteKind = '';
 let activeProfile = null;
@@ -63,9 +112,236 @@ const STORY_FONTS = {
   georgia: 'Georgia, serif',
   courier: "'Courier New', monospace",
 };
+const STORY_KINDS = { story: 'Story', scene: 'Scene', world: 'World note', lore: 'Lore entry' };
+const STORY_PROGRESS = { idea: 'Idea', drafting: 'Drafting', finished: 'Finished' };
+const STORY_STARTERS = {
+  scene: 'Where are we?\n\nWho is here, and what do they want right now?\n\nWhat goes wrong, or changes?\n\n',
+  world: 'What is this place, power, or custom called?\n\nWhat makes it different from the ordinary world?\n\nWho benefits from it, and who pays for it?\n\nHow does it show up in everyday life?\n\n',
+  outline: 'Opening — how does the story begin?\n\nThe spark — what disturbs the status quo?\n\nRising trouble — what gets harder?\n\nTurning point — what changes everything?\n\nAftermath — how do things end up?\n\n',
+};
+
+function parseStoryList(value, max, itemMax) {
+  const list = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
+  return [...new Set(list.map((item) => String(item).trim().slice(0, itemMax)).filter(Boolean))].slice(0, max);
+}
+
+function normalizeStoryMeta(record = {}) {
+  return {
+    kind: STORY_KINDS[record.kind] ? record.kind : 'story',
+    progress: STORY_PROGRESS[record.progress] ? record.progress : 'drafting',
+    summary: typeof record.summary === 'string' ? record.summary.trim().slice(0, 240) : '',
+    setting: typeof record.setting === 'string' ? record.setting.trim().slice(0, 160) : '',
+    tags: parseStoryList(record.tags, 12, 24),
+    characterIds: parseStoryList(record.characterIds, 40, 100),
+  };
+}
+
+function storyMetaEqual(a, b) {
+  const sorted = (list) => JSON.stringify([...(list || [])].sort());
+  return a.kind === b.kind && a.progress === b.progress && a.summary === b.summary
+    && a.setting === b.setting && sorted(a.tags) === sorted(b.tags)
+    && sorted(a.characterIds) === sorted(b.characterIds);
+}
+
+function storyCharacterNames(story) {
+  return (story?.characterIds || [])
+    .map((id) => characters.find((character) => character.id === id)?.name)
+    .filter(Boolean);
+}
+
+const STORY_VERSIONS_KEY = 'fable.story-versions.v1';
+const MAX_STORY_VERSIONS = 10;
+const CHAPTER_PATTERN = /^#{1,2}[ \t]+\S/;
+
+function normalizeStoryVersions(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const result = {};
+  Object.entries(value).forEach(([id, list]) => {
+    if (!id || !Array.isArray(list)) return;
+    const versions = list
+      .filter((item) => item && typeof item === 'object' && typeof item.text === 'string')
+      .map((item) => ({
+        at: typeof item.at === 'string' ? item.at : '',
+        title: typeof item.title === 'string' ? item.title.slice(0, 100) : '',
+        text: item.text.slice(0, 30000),
+        label: typeof item.label === 'string' ? item.label.slice(0, 40) : '',
+      }))
+      .slice(0, MAX_STORY_VERSIONS);
+    if (versions.length) result[id] = versions;
+  });
+  return result;
+}
+
+function countWords(text) {
+  const trimmed = (text || '').trim();
+  return trimmed ? trimmed.split(/\s+/).length : 0;
+}
+
+function parseStoryChapters(text) {
+  const chapters = [];
+  let offset = 0;
+  text.split('\n').forEach((line) => {
+    if (CHAPTER_PATTERN.test(line)) {
+      chapters.push({ title: line.replace(/^#{1,2}[ \t]+/, '').trim(), start: offset, headingLength: line.length });
+    }
+    offset += line.length + 1;
+  });
+  chapters.forEach((chapter, index) => {
+    chapter.end = index + 1 < chapters.length ? chapters[index + 1].start : text.length;
+    chapter.words = countWords(text.slice(chapter.start + chapter.headingLength, chapter.end));
+  });
+  return chapters;
+}
+
+function appendInlineMarkdown(parent, text) {
+  const pattern = /(\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g;
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    if (match.index > last) parent.append(text.slice(last, match.index));
+    const token = match[0];
+    const element = document.createElement(token.startsWith('**') ? 'strong' : 'em');
+    element.textContent = token.replace(/^\*+|\*+$/g, '');
+    parent.append(element);
+    last = match.index + token.length;
+  }
+  if (last < text.length) parent.append(text.slice(last));
+}
+
+function renderStoryMarkdown(container, rawText) {
+  container.replaceChildren();
+  const lines = (rawText || '').replace(/\r\n/g, '\n').split('\n');
+  const chapterHeadings = [];
+  let paragraph = [];
+  let quote = [];
+  let list = null;
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    const element = document.createElement('p');
+    paragraph.forEach((line, index) => {
+      if (index) element.append(document.createElement('br'));
+      appendInlineMarkdown(element, line);
+    });
+    container.append(element);
+    paragraph = [];
+  };
+  const flushQuote = () => {
+    if (!quote.length) return;
+    const element = document.createElement('blockquote');
+    quote.forEach((line, index) => {
+      if (index) element.append(document.createElement('br'));
+      appendInlineMarkdown(element, line);
+    });
+    container.append(element);
+    quote = [];
+  };
+  const flushList = () => { list = null; };
+  const flushAll = () => { flushParagraph(); flushQuote(); flushList(); };
+  lines.forEach((line) => {
+    const heading = line.match(/^(#{1,3})[ \t]+(\S.*)$/);
+    if (!line.trim()) { flushAll(); return; }
+    if (heading) {
+      flushAll();
+      const level = heading[1].length;
+      const element = document.createElement(level === 3 ? 'h3' : 'h2');
+      appendInlineMarkdown(element, heading[2].trim());
+      container.append(element);
+      if (level < 3) chapterHeadings.push({ title: heading[2].trim(), element });
+      return;
+    }
+    if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line.trim())) {
+      flushAll();
+      const rule = document.createElement('hr');
+      rule.className = 'story-scene-break';
+      container.append(rule);
+      return;
+    }
+    const quoted = line.match(/^>[ \t]?(.*)$/);
+    if (quoted) { flushParagraph(); flushList(); quote.push(quoted[1]); return; }
+    const bullet = line.match(/^[-*][ \t]+(\S.*)$/);
+    if (bullet) {
+      flushParagraph(); flushQuote();
+      if (!list) { list = document.createElement('ul'); container.append(list); }
+      const item = document.createElement('li');
+      appendInlineMarkdown(item, bullet[1]);
+      list.append(item);
+      return;
+    }
+    flushQuote(); flushList();
+    paragraph.push(line);
+  });
+  flushAll();
+  if (chapterHeadings.length >= 2) {
+    const nav = document.createElement('nav');
+    nav.className = 'story-toc';
+    nav.setAttribute('aria-label', 'Chapters');
+    const heading = document.createElement('p');
+    heading.className = 'story-toc-title';
+    heading.textContent = 'Chapters';
+    const ol = document.createElement('ol');
+    chapterHeadings.forEach(({ title, element }) => {
+      const li = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = title;
+      button.addEventListener('click', () => {
+        const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        element.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+      });
+      li.append(button);
+      ol.append(li);
+    });
+    nav.append(heading, ol);
+    container.prepend(nav);
+  }
+}
+
 const storedStories = readStorage(STORIES_STORAGE_KEY, null);
 let savedStories = normalizeStories(storedStories);
 const storyDrafts = normalizeStoryDrafts(readStorage(STORY_DRAFTS_KEY, {}));
+const storyVersions = normalizeStoryVersions(readStorage(STORY_VERSIONS_KEY, {}));
+
+const CHARACTER_VERSIONS_KEY = 'fable.character-versions.v1';
+const CHARACTER_SNAPSHOT_FIELDS = [
+  'name', 'role', 'pronouns', 'age', 'species', 'description', 'traits', 'story', 'relations', 'links',
+  'worlds', 'stats', 'groups', 'goal', 'fear', 'secret', 'flaw', 'voice', 'appearance', 'bonds', 'timeline',
+];
+const CHARACTER_PROMPTS = {
+  goal: ['What does {name} want more than anything, and what would they give up to get it?', 'What is {name} working toward that nobody else knows about?', 'If {name} could change one thing about their life tomorrow, what would it be?'],
+  fear: ['What is {name} most afraid of, and when did that fear begin?', 'What situation makes {name} go quiet or run?', 'What would {name} never admit scares them?'],
+  secret: ['What is {name} hiding, and who would be hurt if it came out?', 'What did {name} do once that they have never told anyone?', 'Who does {name} pretend not to know?'],
+  flaw: ['What habit keeps getting {name} into trouble?', 'Where does {name}’s greatest strength turn into a weakness?', 'What does {name} refuse to learn, no matter how many times life teaches it?'],
+  story: ['Describe the moment that made {name} who they are today.', 'Where did {name} grow up, and what did they leave behind?', 'Who raised {name}, and what did that person get wrong?'],
+  voice: ['What is something {name} says all the time, without noticing?', 'How does {name} sound when they are lying?', 'What would {name} say to a stranger in the first ten seconds?'],
+  appearance: ['What is the first thing people notice about {name}, and what do they miss?', 'What does {name} always wear or carry, and why?', 'What scar, mark, or habit hints at {name}’s past?'],
+  description: ['How would {name}’s best friend describe them in one sentence?', 'What impression does {name} give on first meeting, and how is it wrong?'],
+};
+
+function normalizeCharacterVersions(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const result = {};
+  Object.entries(value).forEach(([id, list]) => {
+    if (!id || !Array.isArray(list)) return;
+    const versions = list.filter((item) => item && typeof item === 'object' && item.data && typeof item.data === 'object')
+      .map((item) => {
+        const data = {};
+        CHARACTER_SNAPSHOT_FIELDS.forEach((key) => {
+          const raw = item.data[key];
+          data[key] = Array.isArray(raw)
+            ? raw.map((entry) => String(entry).slice(0, 60)).slice(0, 30)
+            : String(raw ?? '').slice(0, 6000);
+        });
+        return {
+          at: typeof item.at === 'string' ? item.at : '',
+          label: typeof item.label === 'string' ? item.label.slice(0, 40) : '',
+          data,
+        };
+      }).slice(0, 10);
+    if (versions.length) result[id] = versions;
+  });
+  return result;
+}
+
+const characterVersions = normalizeCharacterVersions(readStorage(CHARACTER_VERSIONS_KEY, {}));
 let activeStoryId = '';
 let storyReturnFocus = null;
 let previewStoryId = '';
@@ -81,6 +357,7 @@ if (!Array.isArray(storedStories)) {
 const modalDialogs = [
   characterDialog,
   aboutDialog,
+  changelogDialog,
   deleteDialog,
   imageCropDialog,
   document.querySelector('#story-dialog'),
@@ -174,6 +451,401 @@ function readStorage(key, fallback) {
   }
 }
 
+function parseTimeline(value) {
+  return String(value || '').split(/\r?\n/).map((line) => {
+    const index = line.indexOf('|');
+    return {
+      when: (index < 0 ? '' : line.slice(0, index)).trim().slice(0, 24),
+      text: (index < 0 ? line : line.slice(index + 1)).trim().slice(0, 200),
+    };
+  }).filter((event) => event.text).slice(0, 40);
+}
+
+function serializeTimeline(list) {
+  return list.map((event) => `${(event.when || '').replace(/[\r\n|]+/g, ' ').trim().slice(0, 24)}|${(event.text || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 200)}`).join('\n');
+}
+
+function setTimeline(list) {
+  document.querySelector('#timeline').value = serializeTimeline(list);
+  characterFormHasChanges = true;
+  renderTimelineEditor();
+  updatePreview();
+  saveDraft();
+}
+
+function renderTimelineEditor() {
+  const events = parseTimeline(document.querySelector('#timeline').value);
+  const list = document.querySelector('#timeline-list');
+  list.replaceChildren();
+  events.forEach((event, index) => {
+    const row = document.createElement('li');
+    const when = document.createElement('strong');
+    when.textContent = event.when || '—';
+    const text = document.createElement('span');
+    text.textContent = event.text;
+    text.title = event.text;
+    const makeButton = (label, aria, handler, disabled = false) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.disabled = disabled;
+      button.setAttribute('aria-label', aria);
+      button.addEventListener('click', handler);
+      return button;
+    };
+    const move = (direction) => {
+      const next = [...events];
+      [next[index], next[index + direction]] = [next[index + direction], next[index]];
+      setTimeline(next);
+    };
+    row.append(
+      when, text,
+      makeButton('↑', `Move “${event.text}” earlier`, () => move(-1), index === 0),
+      makeButton('↓', `Move “${event.text}” later`, () => move(1), index === events.length - 1),
+      makeButton('×', `Remove “${event.text}”`, () => setTimeline(events.filter((_, position) => position !== index))),
+    );
+    list.append(row);
+  });
+}
+
+function addTimelineEvent() {
+  const whenInput = document.querySelector('#timeline-when');
+  const textInput = document.querySelector('#timeline-text');
+  if (!textInput.value.trim()) {
+    showToast('Describe what happened first.');
+    textInput.focus();
+    return;
+  }
+  const events = parseTimeline(document.querySelector('#timeline').value);
+  if (events.length >= 40) {
+    showToast('A timeline can hold up to 40 moments.');
+    return;
+  }
+  events.push({ when: whenInput.value.trim(), text: textInput.value.trim() });
+  whenInput.value = '';
+  textInput.value = '';
+  setTimeline(events);
+  whenInput.focus();
+}
+
+function renderProfileTimeline(profile) {
+  const list = document.querySelector('#profile-timeline');
+  list.replaceChildren();
+  const events = parseTimeline(profile.timeline);
+  if (!events.length) {
+    const hint = document.createElement('li');
+    hint.className = 'profile-empty';
+    hint.textContent = 'No timeline yet. Add key moments under “More profile sections” in the editor.';
+    list.append(hint);
+    return;
+  }
+  events.forEach((event) => {
+    const item = document.createElement('li');
+    const when = document.createElement('span');
+    when.className = 'profile-timeline-when';
+    when.textContent = event.when || '·';
+    const text = document.createElement('p');
+    text.textContent = event.text;
+    item.append(when, text);
+    list.append(item);
+  });
+}
+
+function characterSnapshot(profile) {
+  const snapshot = {};
+  CHARACTER_SNAPSHOT_FIELDS.forEach((key) => {
+    const value = profile[key];
+    snapshot[key] = Array.isArray(value) ? [...value] : (value ?? '');
+  });
+  return snapshot;
+}
+
+function recordCharacterVersion(profile, label = '') {
+  if (!profile?.id) return;
+  const snapshot = characterSnapshot(profile);
+  const list = characterVersions[profile.id] || [];
+  if (list[0] && JSON.stringify(list[0].data) === JSON.stringify(snapshot)) return;
+  const entry = { at: profile.updatedAt || new Date().toISOString(), label, data: snapshot };
+  characterVersions[profile.id] = [entry, ...list].slice(0, 10);
+  if (!writeStorage(CHARACTER_VERSIONS_KEY, characterVersions)) {
+    characterVersions[profile.id] = characterVersions[profile.id].slice(0, 3);
+    if (!writeStorage(CHARACTER_VERSIONS_KEY, characterVersions)) {
+      characterVersions[profile.id] = list;
+      showToast('Saved, but version history is full. Older snapshots were kept as they were.');
+    }
+  }
+}
+
+function renderCharacterHistory() {
+  const versions = (activeId && characterVersions[activeId]) || [];
+  const list = document.querySelector('#character-history-list');
+  list.replaceChildren();
+  document.querySelector('#character-history-count').textContent = versions.length ? `${versions.length} saved` : 'None yet';
+  versions.forEach((version, index) => {
+    const row = document.createElement('li');
+    const info = document.createElement('span');
+    info.className = 'story-history-info';
+    const when = document.createElement('strong');
+    when.textContent = version.at
+      ? new Date(version.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+      : 'Earlier version';
+    const detail = document.createElement('span');
+    detail.textContent = [version.data.name, version.label || (index === 0 ? 'Latest save' : '')].filter(Boolean).join(' · ');
+    info.append(when, detail);
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'button button-quiet story-history-restore';
+    restore.textContent = 'Restore';
+    restore.addEventListener('click', () => restoreCharacterVersion(index));
+    row.append(info, restore);
+    list.append(row);
+  });
+}
+
+function restoreCharacterVersion(index) {
+  const version = ((activeId && characterVersions[activeId]) || [])[index];
+  if (!version) return;
+  const current = currentProfile();
+  if (JSON.stringify(characterSnapshot(current)) === JSON.stringify(version.data)) {
+    showToast('The form already has that version.');
+    return;
+  }
+  recordCharacterVersion({ ...current, id: activeId }, 'Before restore');
+  Object.entries(version.data).forEach(([key, value]) => {
+    const field = document.getElementById(key);
+    if (field) field.value = Array.isArray(value) ? traitsValue(value) : value;
+  });
+  document.querySelector('#depth-details').open = Boolean(version.data.goal || version.data.fear || version.data.secret
+    || version.data.flaw || version.data.voice || version.data.appearance);
+  characterFormHasChanges = true;
+  renderRelationEditors();
+  updatePreview();
+  saveDraft();
+  showToast('Version restored in the form. Save to keep it. Portraits and images were not changed.');
+}
+
+let currentCharacterPrompt = null;
+function nextCharacterPrompt() {
+  const profile = currentProfile();
+  const fields = Object.keys(CHARACTER_PROMPTS);
+  const empty = fields.filter((key) => !profile[key]);
+  const pool = empty.length ? empty : fields;
+  const field = pool[Math.floor(Math.random() * pool.length)];
+  const questions = CHARACTER_PROMPTS[field].filter((question) => question !== currentCharacterPrompt?.template);
+  const template = questions[Math.floor(Math.random() * questions.length)] || CHARACTER_PROMPTS[field][0];
+  currentCharacterPrompt = { field, template, text: template.replaceAll('{name}', profile.name || 'your character') };
+  document.querySelector('#prompt-text').textContent = currentCharacterPrompt.text;
+  document.querySelector('#prompt-card').classList.remove('hidden');
+  document.querySelector('#prompt-spark').textContent = '✦ Another nudge';
+}
+
+function useCharacterPrompt() {
+  if (!currentCharacterPrompt) return;
+  const field = document.getElementById(currentCharacterPrompt.field);
+  const section = field.closest('details');
+  if (section) section.open = true;
+  field.placeholder = currentCharacterPrompt.text;
+  field.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  field.focus({ preventScroll: true });
+}
+
+function renderRelationEditors() {
+  renderBondsEditor();
+  renderTimelineEditor();
+  renderCharacterHistory();
+}
+
+function parseBonds(value) {
+  return String(value || '').split(/\r?\n/).map((line) => {
+    const index = line.indexOf('|');
+    return {
+      id: (index < 0 ? line : line.slice(0, index)).trim().slice(0, 100),
+      label: (index < 0 ? '' : line.slice(index + 1)).trim().slice(0, 40),
+    };
+  }).filter((bond, position, list) => bond.id && list.findIndex((item) => item.id === bond.id) === position).slice(0, 30);
+}
+
+function serializeBonds(list) {
+  return list.map((bond) => `${bond.id}|${(bond.label || '').replace(/[\r\n|]+/g, ' ').trim().slice(0, 40)}`).join('\n');
+}
+
+function characterBonds(character) {
+  return parseBonds(character?.bonds).filter((bond) => bond.id !== character.id && characters.some((item) => item.id === bond.id));
+}
+
+function setBonds(list) {
+  document.querySelector('#bonds').value = serializeBonds(list);
+  characterFormHasChanges = true;
+  renderRelationEditors();
+  updatePreview();
+  saveDraft();
+}
+
+function renderBondsEditor() {
+  const select = document.querySelector('#bond-character');
+  const addButton = document.querySelector('#bond-add');
+  const list = document.querySelector('#bond-list');
+  const bonds = parseBonds(document.querySelector('#bonds').value).filter((bond) => characters.some((item) => item.id === bond.id));
+  const others = characters.filter((item) => item.id !== activeId);
+  const available = others.filter((item) => !bonds.some((bond) => bond.id === item.id));
+  select.replaceChildren();
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = available.length ? 'Choose a character…'
+    : others.length ? 'Everyone is already connected' : 'Save another character to connect them';
+  select.append(placeholder);
+  available.forEach((item) => {
+    const option = document.createElement('option');
+    option.value = item.id;
+    option.textContent = item.name;
+    select.append(option);
+  });
+  select.disabled = !available.length;
+  addButton.disabled = !available.length;
+  list.replaceChildren();
+  bonds.forEach((bond) => {
+    const target = characters.find((item) => item.id === bond.id);
+    const row = document.createElement('li');
+    const name = document.createElement('strong');
+    name.textContent = target.name;
+    const label = document.createElement('span');
+    label.textContent = bond.label || 'Connected';
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = '×';
+    remove.setAttribute('aria-label', `Remove connection to ${target.name}`);
+    remove.addEventListener('click', () => setBonds(bonds.filter((item) => item.id !== bond.id)));
+    row.append(name, label, remove);
+    list.append(row);
+  });
+}
+
+function addBondFromEditor() {
+  const select = document.querySelector('#bond-character');
+  const labelInput = document.querySelector('#bond-label');
+  if (!select.value) {
+    showToast('Choose a character to connect first.');
+    select.focus();
+    return;
+  }
+  const bonds = parseBonds(document.querySelector('#bonds').value);
+  bonds.push({ id: select.value, label: labelInput.value.trim() });
+  labelInput.value = '';
+  setBonds(bonds);
+}
+
+function renderProfileDepth(profile) {
+  const box = document.querySelector('#profile-depth');
+  box.replaceChildren();
+  [['Goal', profile.goal], ['Fear', profile.fear], ['Secret', profile.secret], ['Flaw', profile.flaw],
+    ['Voice', profile.voice], ['Appearance', profile.appearance]].filter(([, value]) => value).forEach(([label, value]) => {
+    const wrap = document.createElement('div');
+    const term = document.createElement('dt');
+    term.textContent = label;
+    const detail = document.createElement('dd');
+    detail.textContent = value;
+    wrap.append(term, detail);
+    box.append(wrap);
+  });
+  if (!box.childElementCount) {
+    const hint = document.createElement('p');
+    hint.className = 'profile-empty';
+    hint.textContent = 'No goals, fears, or secrets yet. Add them under “Go deeper” in the editor.';
+    box.append(hint);
+  }
+}
+
+function renderProfileConnections(profile) {
+  const box = document.querySelector('#profile-connections');
+  box.replaceChildren();
+  const rows = characterBonds(profile).map((bond) => ({
+    other: characters.find((item) => item.id === bond.id), detail: bond.label || 'Connected',
+  }));
+  characters.forEach((other) => {
+    if (other.id === profile.id || rows.some((row) => row.other.id === other.id)) return;
+    const back = characterBonds(other).find((bond) => bond.id === profile.id);
+    if (back) rows.push({ other, detail: `${back.label || 'Connected'} · added on ${other.name}’s profile` });
+  });
+  if (!rows.length) {
+    const hint = document.createElement('p');
+    hint.className = 'profile-empty';
+    hint.textContent = 'No connections yet. Link characters under “More profile sections” in the editor.';
+    box.append(hint);
+    return;
+  }
+  rows.forEach(({ other, detail }) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'profile-story-link';
+    const name = document.createElement('strong');
+    name.textContent = other.name;
+    const label = document.createElement('span');
+    label.textContent = detail;
+    button.append(name, label);
+    button.addEventListener('click', () => {
+      requestProfileClose(() => openCharacterProfile(other, document.querySelector('#character-grid')));
+    });
+    box.append(button);
+  });
+}
+
+function syncCharacterActions(editing) {
+  document.querySelector('#delete-character').classList.toggle('hidden', !editing);
+  document.querySelector('#duplicate-character').classList.toggle('hidden', !editing);
+}
+
+function duplicateCharacter() {
+  const profile = currentProfile();
+  if (!profile.name) return;
+  activeId = '';
+  document.querySelector('#character-id').value = '';
+  document.querySelector('#name').value = `${profile.name} (copy)`.slice(0, 48);
+  document.querySelector('#save-label').textContent = 'Save character';
+  syncCharacterActions(false);
+  characterFormHasChanges = true;
+  document.querySelector('#autosave-status').textContent = 'Copy ready — save to add it';
+  renderRelationEditors();
+  updatePreview();
+  saveDraft();
+  showToast('Copy ready. Rename it and save to add it to your cast.');
+  document.querySelector('#name').focus();
+  document.querySelector('#name').select();
+}
+
+function requestNewCharacter(returnFocus = document.activeElement) {
+  if (!characterFormHasChanges) {
+    resetForm();
+    return;
+  }
+  pendingDeleteId = 'new-character';
+  pendingDeleteKind = 'discard-character';
+  pendingDeleteFocus = returnFocus;
+  document.querySelector('#delete-dialog-title').textContent = 'Start a new character?';
+  document.querySelector('#delete-dialog-message').textContent = 'You have unsaved changes. Starting a new character will discard them.';
+  document.querySelector('#cancel-delete').textContent = 'Keep editing';
+  document.querySelector('#confirm-delete').textContent = 'Discard & start new';
+  deleteDialog.showModal();
+  syncModalScrollLock();
+  document.querySelector('#cancel-delete').focus();
+}
+
+function updateProfileMeter(profile) {
+  const checks = [
+    ['a role', profile.role], ['a quick description', profile.description], ['a few traits', profile.traits.length],
+    ['a backstory', profile.story], ['a portrait', profile.avatar],
+    ['a goal, fear, or secret', profile.goal || profile.fear || profile.secret],
+    ['a connection to another character', parseBonds(profile.bonds).length],
+  ];
+  const done = checks.filter(([, value]) => value).length + (profile.name ? 1 : 0);
+  const total = checks.length + 1;
+  const percent = Math.round((done / total) * 100);
+  const next = checks.find(([, value]) => !value);
+  document.querySelector('#profile-meter-fill').style.width = `${percent}%`;
+  document.querySelector('#profile-meter-text').textContent = !profile.name
+    ? 'Start with a name'
+    : `Profile ${percent}% complete${next ? ` · next, add ${next[0]}` : ' · fully fleshed out ✦'}`;
+}
+
 function currentProfile() {
   return {
     id: document.querySelector('#character-id').value || activeId || '',
@@ -195,6 +867,15 @@ function currentProfile() {
     links: document.querySelector('#links').value.trim(),
     worlds: document.querySelector('#worlds').value.trim(),
     stats: document.querySelector('#stats').value.trim(),
+    groups: document.querySelector('#groups').value.split(',').map((group) => group.trim()).filter(Boolean).slice(0, 10),
+    goal: document.querySelector('#goal').value.trim(),
+    fear: document.querySelector('#fear').value.trim(),
+    secret: document.querySelector('#secret').value.trim(),
+    flaw: document.querySelector('#flaw').value.trim(),
+    voice: document.querySelector('#voice').value.trim(),
+    appearance: document.querySelector('#appearance').value.trim(),
+    bonds: document.querySelector('#bonds').value.trim(),
+    timeline: document.querySelector('#timeline').value.trim(),
   };
 }
 
@@ -231,6 +912,7 @@ function normalizeStories(value) {
       backgroundColor: normalizeStoryBackground(story.backgroundColor),
       image: typeof story.image === 'string' ? story.image : '',
       updatedAt: typeof story.updatedAt === 'string' ? story.updatedAt : '',
+      ...normalizeStoryMeta(story),
     }));
 }
 
@@ -247,6 +929,7 @@ function normalizeStoryDrafts(value) {
       backgroundColor: normalizeStoryBackground(story.backgroundColor),
       image: typeof story.image === 'string' ? story.image : '',
       updatedAt: typeof story.updatedAt === 'string' ? story.updatedAt : '',
+      ...normalizeStoryMeta(story),
     }]));
 }
 
@@ -269,6 +952,7 @@ function migrateLegacyLore(value) {
     backgroundColor: DEFAULT_STORY_BACKGROUND,
     image: '',
     updatedAt: new Date().toISOString(),
+    ...normalizeStoryMeta({}),
   }];
 }
 
@@ -281,6 +965,14 @@ function currentStoryDraft() {
     bodyFont: STORY_FONTS[document.querySelector('#story-body-font').value] ? document.querySelector('#story-body-font').value : 'dm-sans',
     backgroundColor: normalizeStoryBackground(document.querySelector('#story-background').value),
     image: document.querySelector('#story-image-url').value.trim(),
+    ...normalizeStoryMeta({
+      kind: document.querySelector('#story-kind').value,
+      progress: document.querySelector('#story-progress').value,
+      summary: document.querySelector('#story-summary').value,
+      setting: document.querySelector('#story-setting').value,
+      tags: document.querySelector('#story-tags').value,
+      characterIds: [...document.querySelectorAll('#story-characters input:checked')].map((input) => input.value),
+    }),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -299,7 +991,20 @@ function updateStoryPreview(story) {
   const readingCoverWrap = document.querySelector('#story-reading-cover-wrap');
   const readingCover = document.querySelector('#story-reading-cover');
   readingTitle.textContent = story?.title || 'Your story title';
-  readingText.textContent = story?.text || '';
+  renderStoryMarkdown(readingText, story?.text || '');
+  const readingSummary = document.querySelector('#story-reading-summary');
+  const readingMeta = document.querySelector('#story-reading-meta');
+  const castNames = storyCharacterNames(story);
+  const metaParts = story ? [
+    STORY_KINDS[story.kind], STORY_PROGRESS[story.progress],
+    story.setting && `Set in ${story.setting}`,
+    castNames.length && `Featuring ${castNames.join(', ')}`,
+    story.tags?.length && story.tags.map((tag) => `#${tag}`).join(' '),
+  ].filter(Boolean) : [];
+  readingSummary.textContent = story?.summary || '';
+  readingSummary.classList.toggle('hidden', !story?.summary);
+  readingMeta.textContent = metaParts.join('  ·  ');
+  readingMeta.classList.toggle('hidden', !metaParts.length);
   readingTitle.style.fontFamily = titleFont;
   readingText.style.fontFamily = bodyFont;
   [document.querySelector('#story-reading-view'), document.querySelector('#story-form')].forEach((element) => {
@@ -365,8 +1070,278 @@ function openStoryPreview() {
   updateBackToTopVisibility();
 }
 
+function replaceStoryTextRange(start, end, replacement, selectFrom = null, selectTo = null) {
+  const textarea = document.querySelector('#story-text');
+  textarea.focus();
+  textarea.setSelectionRange(start, end);
+  let done = false;
+  try {
+    done = typeof document.execCommand === 'function' && document.execCommand('insertText', false, replacement)
+      && textarea.value.slice(start, start + replacement.length) === replacement;
+  } catch { done = false; }
+  if (!done) {
+    textarea.setRangeText(replacement, start, end, 'end');
+    handleStoryEditorInput();
+  }
+  const from = selectFrom ?? start + replacement.length;
+  textarea.setSelectionRange(from, selectTo ?? from);
+}
+
+function applyStoryFormat(kind) {
+  const textarea = document.querySelector('#story-text');
+  if (kind === 'undo' || kind === 'redo') {
+    textarea.focus();
+    try { document.execCommand(kind); } catch { /* browser without execCommand */ }
+    handleStoryEditorInput();
+    return;
+  }
+  const { selectionStart: start, selectionEnd: end, value } = textarea;
+  const selected = value.slice(start, end);
+  if (kind === 'bold' || kind === 'italic') {
+    const mark = kind === 'bold' ? '**' : '*';
+    const inner = selected || (kind === 'bold' ? 'bold text' : 'italic text');
+    replaceStoryTextRange(start, end, `${mark}${inner}${mark}`, start + mark.length, start + mark.length + inner.length);
+  } else if (kind === 'quote') {
+    const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+    const block = value.slice(lineStart, end) || 'A line worth remembering';
+    replaceStoryTextRange(lineStart, end, block.split('\n').map((line) => (line.startsWith('> ') ? line : `> ${line}`)).join('\n'));
+  } else if (kind === 'break') {
+    const before = start === 0 ? '' : value.slice(0, start).endsWith('\n\n') ? '' : value.slice(0, start).endsWith('\n') ? '\n' : '\n\n';
+    replaceStoryTextRange(start, end, `${before}---\n\n`);
+  } else if (kind === 'chapter') {
+    const number = parseStoryChapters(value).length + 1;
+    const title = `Chapter ${number}`;
+    const before = start === 0 ? '' : value.slice(0, start).endsWith('\n\n') ? '' : value.slice(0, start).endsWith('\n') ? '\n' : '\n\n';
+    const heading = `${before}## ${title}\n\n`;
+    const titleStart = start + before.length + 3;
+    replaceStoryTextRange(start, end, heading, titleStart, titleStart + title.length);
+  }
+  handleStoryEditorInput();
+}
+
+function jumpToStoryPosition(position, length) {
+  const textarea = document.querySelector('#story-text');
+  const total = Math.max(1, textarea.value.length);
+  textarea.scrollTop = Math.max(0, (position / total) * (textarea.scrollHeight - textarea.clientHeight) - 24);
+  textarea.focus();
+  textarea.setSelectionRange(position, position + length);
+}
+
+function moveStoryChapter(index, direction) {
+  const textarea = document.querySelector('#story-text');
+  const text = textarea.value;
+  const chapters = parseStoryChapters(text);
+  const target = index + direction;
+  if (!chapters[index] || !chapters[target]) return;
+  const preamble = text.slice(0, chapters[0].start).trim();
+  const segments = chapters.map((chapter) => text.slice(chapter.start, chapter.end).trim());
+  [segments[index], segments[target]] = [segments[target], segments[index]];
+  const next = `${[preamble, ...segments].filter(Boolean).join('\n\n')}\n`;
+  textarea.focus();
+  textarea.setSelectionRange(0, text.length);
+  let done = false;
+  try { done = document.execCommand('insertText', false, next) && textarea.value === next; } catch { done = false; }
+  if (!done) { textarea.value = next; }
+  handleStoryEditorInput();
+  const moved = parseStoryChapters(textarea.value)[target];
+  if (moved) jumpToStoryPosition(moved.start, moved.headingLength);
+}
+
+function renderStoryChapters() {
+  const text = document.querySelector('#story-text').value;
+  const chapters = parseStoryChapters(text);
+  const list = document.querySelector('#story-chapter-list');
+  list.replaceChildren();
+  document.querySelector('#story-chapter-count').textContent = chapters.length
+    ? `${chapters.length} chapter${chapters.length === 1 ? '' : 's'}` : 'None yet';
+  document.querySelector('#story-chapter-hint').classList.toggle('hidden', chapters.length > 0);
+  chapters.forEach((chapter, index) => {
+    const row = document.createElement('li');
+    const jump = document.createElement('button');
+    jump.type = 'button';
+    jump.className = 'story-chapter-jump';
+    const name = document.createElement('strong');
+    name.textContent = chapter.title;
+    const meta = document.createElement('span');
+    meta.textContent = `${chapter.words.toLocaleString()} word${chapter.words === 1 ? '' : 's'}`;
+    jump.append(name, meta);
+    jump.addEventListener('click', () => jumpToStoryPosition(chapter.start, chapter.headingLength));
+    const up = document.createElement('button');
+    up.type = 'button';
+    up.className = 'story-chapter-move';
+    up.textContent = '↑';
+    up.disabled = index === 0;
+    up.setAttribute('aria-label', `Move ${chapter.title} up`);
+    up.addEventListener('click', () => moveStoryChapter(index, -1));
+    const down = document.createElement('button');
+    down.type = 'button';
+    down.className = 'story-chapter-move';
+    down.textContent = '↓';
+    down.disabled = index === chapters.length - 1;
+    down.setAttribute('aria-label', `Move ${chapter.title} down`);
+    down.addEventListener('click', () => moveStoryChapter(index, 1));
+    row.append(jump, up, down);
+    list.append(row);
+  });
+  if (chapters.length) document.querySelector('#story-chapters-panel').open = true;
+}
+
+function recordStoryVersion(story, label = '') {
+  const list = storyVersions[story.id] || [];
+  const latest = list[0];
+  if (latest && latest.title === story.title && latest.text === story.text) return;
+  const entry = { at: story.updatedAt || new Date().toISOString(), title: story.title, text: story.text, label };
+  storyVersions[story.id] = [entry, ...list].slice(0, MAX_STORY_VERSIONS);
+  if (!writeStorage(STORY_VERSIONS_KEY, storyVersions)) {
+    storyVersions[story.id] = storyVersions[story.id].slice(0, 3);
+    if (!writeStorage(STORY_VERSIONS_KEY, storyVersions)) {
+      storyVersions[story.id] = list;
+      showToast('Saved, but version history is full. Older snapshots were kept as they were.');
+    }
+  }
+}
+
+function renderStoryHistory() {
+  const versions = storyVersions[activeStoryId] || [];
+  const list = document.querySelector('#story-history-list');
+  list.replaceChildren();
+  document.querySelector('#story-history-count').textContent = versions.length
+    ? `${versions.length} saved` : 'None yet';
+  versions.forEach((version, index) => {
+    const row = document.createElement('li');
+    const info = document.createElement('span');
+    info.className = 'story-history-info';
+    const when = document.createElement('strong');
+    when.textContent = version.at
+      ? new Date(version.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+      : 'Earlier version';
+    const detail = document.createElement('span');
+    detail.textContent = [
+      `${countWords(version.text).toLocaleString()} words`,
+      version.label || (index === 0 ? 'Latest save' : ''),
+    ].filter(Boolean).join(' · ');
+    info.append(when, detail);
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'button button-quiet story-history-restore';
+    restore.textContent = 'Restore';
+    restore.addEventListener('click', () => restoreStoryVersion(index));
+    row.append(info, restore);
+    list.append(row);
+  });
+}
+
+function restoreStoryVersion(index) {
+  const version = (storyVersions[activeStoryId] || [])[index];
+  if (!version) return;
+  const current = currentStoryDraft();
+  if (current.title === version.title && current.text === version.text) {
+    showToast('The editor already has that version.');
+    return;
+  }
+  if (savedStories.some((story) => story.id === activeStoryId) && (current.text.trim() || current.title)) {
+    recordStoryVersion(current, 'Before restore');
+  }
+  document.querySelector('#story-title').value = version.title;
+  document.querySelector('#story-text').value = version.text;
+  handleStoryEditorInput();
+  renderStoryHistory();
+  showToast('Version restored in the editor. Save to keep it, or Discard changes to go back.');
+}
+
+function updateStoryCounter(text = '') {
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  const minutes = words ? Math.max(1, Math.round(words / 220)) : 0;
+  const counter = document.querySelector('#story-word-count');
+  counter.textContent = `${words.toLocaleString()} word${words === 1 ? '' : 's'} · ${minutes ? `${minutes} min read` : 'no reading time yet'} · ${text.length.toLocaleString()} / 30,000 characters`;
+  counter.classList.toggle('is-near-limit', text.length >= 27000);
+  document.querySelector('#story-starters').classList.toggle('hidden', Boolean(text.trim()));
+}
+
+function renderStoryCharacterPicker(selectedIds = []) {
+  const picker = document.querySelector('#story-characters');
+  picker.replaceChildren();
+  if (!characters.length) {
+    const hint = document.createElement('p');
+    hint.className = 'story-picker-empty';
+    hint.textContent = 'No characters yet. Create one in the Character Studio and they will appear here.';
+    picker.append(hint);
+    return;
+  }
+  characters.forEach((character) => {
+    const chip = document.createElement('label');
+    chip.className = 'story-character-chip';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = character.id;
+    input.checked = selectedIds.includes(character.id);
+    const name = document.createElement('span');
+    name.textContent = character.name;
+    chip.append(input, name);
+    picker.append(chip);
+  });
+}
+
+function insertStoryStarter(key) {
+  const textarea = document.querySelector('#story-text');
+  if (!STORY_STARTERS[key] || textarea.value.trim()) return;
+  textarea.value = STORY_STARTERS[key];
+  handleStoryEditorInput();
+  textarea.focus();
+  textarea.setSelectionRange(0, 0);
+}
+
+let discardArmTimer = 0;
+function disarmStoryDiscard() {
+  window.clearTimeout(discardArmTimer);
+  const button = document.querySelector('#story-discard');
+  button.classList.remove('is-armed');
+  const saved = savedStories.some((story) => story.id === activeStoryId);
+  button.textContent = saved ? 'Discard changes' : 'Discard draft';
+}
+
+function discardStoryChanges() {
+  const id = activeStoryId;
+  const button = document.querySelector('#story-discard');
+  const dialog = document.querySelector('#story-dialog');
+  const saved = savedStories.some((story) => story.id === id);
+  const current = currentStoryDraft();
+  const hasDraft = Boolean(storyDrafts[id]);
+  const hasContent = hasDraft || current.title || current.text.trim() || current.image;
+  if (saved && !hasDraft) {
+    showToast('No unsaved changes to discard.');
+    return;
+  }
+  if (!saved && !hasContent) {
+    dialog.close();
+    return;
+  }
+  if (!button.classList.contains('is-armed')) {
+    button.classList.add('is-armed');
+    button.textContent = 'Click again to confirm';
+    discardArmTimer = window.setTimeout(disarmStoryDiscard, 3500);
+    return;
+  }
+  const nextDrafts = { ...storyDrafts };
+  delete nextDrafts[id];
+  if (!writeStorage(STORY_DRAFTS_KEY, nextDrafts)) {
+    showToast('Could not discard this draft. Your browser storage may be unavailable.');
+    return;
+  }
+  delete storyDrafts[id];
+  if (saved) {
+    openStoryEditor(id, storyReturnFocus);
+    showToast('Changes discarded. Showing your last saved version.');
+  } else {
+    dialog.close();
+    showToast('Draft discarded.');
+  }
+}
+
 function handleStoryEditorInput() {
   const draft = currentStoryDraft();
+  updateStoryCounter(draft.text);
+  renderStoryChapters();
   updateStoryPreview(draft);
   saveStoryDraft();
 }
@@ -379,27 +1354,66 @@ function handleStoryImageUpload(event) {
     event.target.value = '';
     return;
   }
-  const reader = new FileReader();
-  reader.addEventListener('load', () => {
-    document.querySelector('#story-image-url').value = String(reader.result);
+  const input = event.target;
+  resizeStoryImage(file).then((dataUrl) => {
+    document.querySelector('#story-image-url').value = dataUrl;
+    syncStoryImageChip();
     handleStoryEditorInput();
+  }).catch(() => showToast('Could not read that image. Try another file or paste an image link.'))
+    .finally(() => { input.value = ''; });
+}
+
+function resizeStoryImage(file, maxSide = 1600, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.addEventListener('load', () => {
+      URL.revokeObjectURL(url);
+      if (!image.naturalWidth || !image.naturalHeight) { reject(new Error('Unreadable image')); return; }
+      const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const context = canvas.getContext('2d');
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    });
+    image.addEventListener('error', () => { URL.revokeObjectURL(url); reject(new Error('Unreadable image')); });
+    image.src = url;
   });
-  reader.addEventListener('error', () => showToast('Could not read that image. Try another file or paste an image link.'));
-  reader.readAsDataURL(file);
 }
 
 function renderStories() {
   const library = document.querySelector('#story-library');
   library.replaceChildren();
   const savedById = new Map(savedStories.map((story) => [story.id, story]));
-  const items = [...savedStories];
+  const all = [...savedStories];
   Object.values(storyDrafts).forEach((draft) => {
     const saved = savedById.get(draft.id);
     const item = { ...draft, isDraft: true };
-    if (saved) items[items.findIndex((story) => story.id === draft.id)] = item;
-    else items.unshift(item);
+    if (saved) all[all.findIndex((story) => story.id === draft.id)] = item;
+    else all.unshift(item);
   });
-  items.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  const query = document.querySelector('#story-search').value.trim().toLowerCase();
+  const kindFilter = document.querySelector('#story-filter-kind').value;
+  const progressFilter = document.querySelector('#story-filter-progress').value;
+  const sortMode = document.querySelector('#story-sort').value;
+  const items = all.filter((story) => {
+    if (kindFilter && story.kind !== kindFilter) return false;
+    if (progressFilter && story.progress !== progressFilter) return false;
+    if (!query) return true;
+    return [
+      story.title, story.text, story.summary, story.setting, STORY_KINDS[story.kind],
+      ...(story.tags || []), ...storyCharacterNames(story),
+    ].join(' ').toLowerCase().includes(query);
+  });
+  items.sort((a, b) => {
+    if (sortMode === 'title') return (a.title || 'Untitled story').localeCompare(b.title || 'Untitled story');
+    const order = (a.updatedAt || '').localeCompare(b.updatedAt || '');
+    return sortMode === 'oldest' ? order : -order;
+  });
   items.forEach((story) => {
     const item = document.createElement('div');
     item.className = 'story-card-item';
@@ -411,7 +1425,7 @@ function renderStories() {
     header.className = 'story-card-header';
     const label = document.createElement('span');
     label.className = 'story-card-label';
-    label.textContent = story.isDraft ? 'DRAFT' : 'STORY';
+    label.textContent = story.isDraft ? `DRAFT · ${(STORY_KINDS[story.kind] || 'Story').toUpperCase()}` : (STORY_KINDS[story.kind] || 'Story').toUpperCase();
     const date = document.createElement('span');
     date.className = 'story-card-date';
     date.textContent = story.updatedAt
@@ -423,7 +1437,32 @@ function renderStories() {
     title.style.fontFamily = STORY_FONTS[story.titleFont] || STORY_FONTS.playfair;
     const excerpt = document.createElement('span');
     excerpt.className = 'story-card-excerpt';
-    excerpt.textContent = story.text.trim() || 'Nothing written yet. Open this story to keep going.';
+    excerpt.textContent = story.summary || story.text.trim() || 'Nothing written yet. Open this story to keep going.';
+    const chips = document.createElement('span');
+    chips.className = 'story-card-chips';
+    const progressChip = document.createElement('span');
+    progressChip.className = `story-chip story-chip-${story.progress}`;
+    progressChip.textContent = STORY_PROGRESS[story.progress] || 'Drafting';
+    chips.append(progressChip);
+    const chapterTotal = parseStoryChapters(story.text || '').length;
+    if (chapterTotal) {
+      const chapterChip = document.createElement('span');
+      chapterChip.className = 'story-chip';
+      chapterChip.textContent = `${chapterTotal} chapter${chapterTotal === 1 ? '' : 's'}`;
+      chips.append(chapterChip);
+    }
+    (story.tags || []).slice(0, 3).forEach((tag) => {
+      const chip = document.createElement('span');
+      chip.className = 'story-chip';
+      chip.textContent = `#${tag}`;
+      chips.append(chip);
+    });
+    const castNames = storyCharacterNames(story);
+    const cast = document.createElement('span');
+    cast.className = 'story-card-cast';
+    cast.textContent = castNames.length
+      ? `✦ ${castNames.slice(0, 2).join(', ')}${castNames.length > 2 ? ` +${castNames.length - 2}` : ''}`
+      : '';
     const action = document.createElement('span');
     action.className = 'story-card-action';
     action.textContent = story.isDraft ? 'Continue writing →' : 'Open story →';
@@ -435,7 +1474,9 @@ function renderStories() {
       setImageSource(cover, story.image, () => cover.classList.add('hidden'));
       card.append(cover);
     }
-    card.append(header, title, excerpt, action);
+    card.append(header, title, excerpt, chips);
+    if (castNames.length) card.append(cast);
+    card.append(action);
     card.addEventListener('click', () => {
       previewStoryId = story.id;
       updateStoryPreview(story);
@@ -462,11 +1503,13 @@ function renderStories() {
     library.removeAttribute('tabindex');
     library.removeAttribute('aria-label');
   }
-  document.querySelector('#story-sidebar-count').textContent = String(items.length);
-  document.querySelector('#lore-count').textContent = `(${items.length})`;
-  document.querySelector('#story-empty').classList.toggle('hidden', items.length > 0);
+  document.querySelector('#story-sidebar-count').textContent = String(all.length);
+  document.querySelector('#lore-count').textContent = `(${all.length})`;
+  document.querySelector('#story-empty').classList.toggle('hidden', all.length > 0);
+  document.querySelector('#story-filter-bar').classList.toggle('hidden', all.length === 0);
+  document.querySelector('#story-no-results').classList.toggle('hidden', !(all.length > 0 && items.length === 0));
   library.classList.toggle('hidden', items.length === 0);
-  const previewStory = items.find((story) => story.id === previewStoryId) || items[0];
+  const previewStory = all.find((story) => story.id === previewStoryId) || items[0] || all[0];
   if (previewStory) {
     previewStoryId = previewStory.id;
     updateStoryPreview(previewStory);
@@ -483,7 +1526,7 @@ function openStoryEditor(storyId = '', returnFocus = document.activeElement) {
   const draft = storyDrafts[activeStoryId];
   const story = draft || saved || {
     id: activeStoryId, title: '', text: '', titleFont: 'playfair', bodyFont: 'dm-sans',
-    backgroundColor: DEFAULT_STORY_BACKGROUND, image: '',
+    backgroundColor: DEFAULT_STORY_BACKGROUND, image: '', ...normalizeStoryMeta({}),
   };
   document.querySelector('#story-title').value = story.title;
   document.querySelector('#story-text').value = story.text;
@@ -492,6 +1535,19 @@ function openStoryEditor(storyId = '', returnFocus = document.activeElement) {
   document.querySelector('#story-background').value = normalizeStoryBackground(story.backgroundColor);
   document.querySelector('#story-background-hex').value = normalizeStoryBackground(story.backgroundColor);
   document.querySelector('#story-image-url').value = story.image;
+  syncStoryImageChip();
+  const meta = normalizeStoryMeta(story);
+  document.querySelector('#story-kind').value = meta.kind;
+  document.querySelector('#story-progress').value = meta.progress;
+  document.querySelector('#story-summary').value = meta.summary;
+  document.querySelector('#story-setting').value = meta.setting;
+  document.querySelector('#story-tags').value = meta.tags.join(', ');
+  renderStoryCharacterPicker(meta.characterIds);
+  updateStoryCounter(story.text);
+  document.querySelector('#story-chapters-panel').open = false;
+  renderStoryChapters();
+  renderStoryHistory();
+  disarmStoryDiscard();
   document.querySelector('#story-editor-title').textContent = story.title || 'Write a story';
   document.querySelector('#story-save-status').textContent = draft
     ? 'Draft saved on this device'
@@ -528,14 +1584,20 @@ function saveCurrentStory() {
     showToast('Could not save this story. Your browser storage may be full.');
     return;
   }
+  const previousSaved = savedStories.find((item) => item.id === story.id);
   savedStories.splice(0, savedStories.length, ...nextStories);
   delete storyDrafts[story.id];
+  if (previousSaved && !(storyVersions[story.id] || []).length) recordStoryVersion(previousSaved);
+  recordStoryVersion(story);
+  renderStoryHistory();
   if (!writeStorage(STORY_DRAFTS_KEY, storyDrafts)) {
     showToast('Story saved, but its temporary draft could not be cleared.');
   }
   document.querySelector('#story-save-status').textContent = 'Story saved on this device';
   document.querySelector('#story-editor-title').textContent = story.title;
   renderStories();
+  showToast('Story saved.');
+  return true;
 }
 
 function saveStoryDraft() {
@@ -543,7 +1605,8 @@ function saveStoryDraft() {
   const saved = savedStories.find((story) => story.id === draft.id);
   const unchanged = saved && saved.title === draft.title && saved.text === draft.text
     && saved.titleFont === draft.titleFont && saved.bodyFont === draft.bodyFont
-    && saved.backgroundColor === draft.backgroundColor && saved.image === draft.image;
+    && saved.backgroundColor === draft.backgroundColor && saved.image === draft.image
+    && storyMetaEqual(saved, draft);
   if (unchanged) {
     delete storyDrafts[draft.id];
     writeStorage(STORY_DRAFTS_KEY, storyDrafts);
@@ -733,6 +1796,10 @@ function updatePreview() {
   setText('#preview-description', profile.description, 'Give them a name and a few details. Their profile will come together right here.');
   setText('#preview-index', String(position >= 0 ? position + 1 : characters.length + 1).padStart(2, '0'));
   document.querySelector('#description-count').textContent = String(profile.description.length);
+  document.querySelector('#backstory-count').textContent = String(profile.story.length);
+  updateProfileMeter(profile);
+  syncImageChips();
+  syncGalleryThumbs();
 
   const traitsContainer = document.querySelector('#preview-traits');
   traitsContainer.replaceChildren();
@@ -776,13 +1843,24 @@ function updatePreview() {
 
 function renderCharacters() {
   const query = document.querySelector('#search-characters').value.trim().toLowerCase();
-  const filtered = characters.filter((character) => [
+  const groupSelect = document.querySelector('#cast-group-filter');
+  const allGroups = [...new Set(characters.flatMap((character) => character.groups || []))].sort((a, b) => a.localeCompare(b));
+  const previousGroup = groupSelect.value;
+  groupSelect.replaceChildren(new Option('All groups', ''), ...allGroups.map((group) => new Option(group, group)));
+  groupSelect.value = allGroups.includes(previousGroup) ? previousGroup : '';
+  groupSelect.classList.toggle('hidden', !allGroups.length);
+  const groupFilter = groupSelect.value;
+  const sortMode = document.querySelector('#cast-sort').value;
+  const filtered = characters.filter((character) => (!groupFilter || (character.groups || []).includes(groupFilter)) && [
     character.name,
     character.role,
     character.species,
     character.description,
     ...(character.traits || []),
+    ...(character.groups || []),
   ].join(' ').toLowerCase().includes(query));
+  if (sortMode === 'name') filtered.sort((a, b) => a.name.localeCompare(b.name));
+  else if (sortMode === 'edited') filtered.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
   characterGrid.replaceChildren();
   filtered.forEach((character) => {
     const item = document.createElement('div');
@@ -840,6 +1918,12 @@ function renderCharacters() {
     arrow.className = 'cast-arrow';
     arrow.textContent = '↗';
     info.append(name, heading, description);
+    if ((character.groups || []).length) {
+      const groupLine = document.createElement('span');
+      groupLine.className = 'cast-groups';
+      groupLine.textContent = `⚑ ${character.groups.slice(0, 2).join(', ')}${character.groups.length > 2 ? ` +${character.groups.length - 2}` : ''}`;
+      info.append(groupLine);
+    }
     if (visibleTraits.length) info.append(traits);
     info.append(viewProfile);
     card.append(thumb, info, arrow);
@@ -879,6 +1963,7 @@ function renderCharacters() {
     emptyState.querySelector('p').textContent = 'Create a character to see their card and profile details here.';
     emptyState.querySelector('button').classList.remove('hidden');
   }
+  renderRelationEditors();
 }
 
 function validWebUrl(value) {
@@ -894,6 +1979,33 @@ function setProfileText(selector, value, fallback = '') {
   const element = document.querySelector(selector);
   element.textContent = value || fallback;
   element.classList.toggle('hidden', !value && !fallback);
+}
+
+function renderProfileStories(characterId) {
+  const box = document.querySelector('#profile-stories');
+  box.replaceChildren();
+  const linked = savedStories.filter((story) => (story.characterIds || []).includes(characterId));
+  if (!linked.length) {
+    const hint = document.createElement('p');
+    hint.className = 'profile-empty';
+    hint.textContent = 'Not in any story yet. Pick this character under “Story details” when writing a story.';
+    box.append(hint);
+    return;
+  }
+  linked.forEach((story) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'profile-story-link';
+    const name = document.createElement('strong');
+    name.textContent = story.title || 'Untitled story';
+    const detail = document.createElement('span');
+    detail.textContent = `${STORY_KINDS[story.kind] || 'Story'} · ${STORY_PROGRESS[story.progress] || 'Drafting'}`;
+    button.append(name, detail);
+    button.addEventListener('click', () => {
+      requestProfileClose(() => openStoryEditor(story.id, document.querySelector('#new-story')));
+    });
+    box.append(button);
+  });
 }
 
 function openCharacterProfile(character, returnFocus = document.activeElement) {
@@ -937,7 +2049,7 @@ function openCharacterProfile(character, returnFocus = document.activeElement) {
 
   const tags = document.querySelector('#profile-tags');
   tags.replaceChildren();
-  [...profile.traits, profile.pronouns, profile.age, profile.species].filter(Boolean).forEach((item) => {
+  [...profile.traits, profile.pronouns, profile.age, profile.species, ...(profile.groups || []).map((group) => `⚑ ${group}`)].filter(Boolean).forEach((item) => {
     const tag = document.createElement('span');
     tag.className = 'profile-tag';
     tag.textContent = item;
@@ -980,6 +2092,10 @@ function openCharacterProfile(character, returnFocus = document.activeElement) {
 
   setProfileText('#profile-relations', profile.relations, 'No relationships added yet.');
   setProfileText('#profile-worlds', profile.worlds, 'No world or setting added yet.');
+  renderProfileStories(profile.id);
+  renderProfileDepth(profile);
+  renderProfileConnections(profile);
+  renderProfileTimeline(profile);
   const links = document.querySelector('#profile-links');
   links.replaceChildren();
   (profile.links || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).forEach((line) => {
@@ -1047,7 +2163,7 @@ function loadCharacter(id) {
     description: character.description,
     traits: traitsValue(character.traits),
     avatar: character.avatar,
-    cover: character.cover || character.avatar,
+    cover: character.cover,
     accent: character.accent || '#4385e8',
     story: character.story,
     gallery: character.gallery,
@@ -1055,6 +2171,9 @@ function loadCharacter(id) {
     links: character.links,
     worlds: character.worlds,
     stats: character.stats,
+    groups: traitsValue(character.groups),
+    goal: character.goal, fear: character.fear, secret: character.secret, flaw: character.flaw,
+    voice: character.voice, appearance: character.appearance, bonds: character.bonds, timeline: character.timeline,
   }).forEach(([idName, value]) => { document.getElementById(idName).value = value || ''; });
   imageCropState = {
     avatar: normalizeImageCrop(character.avatarCrop),
@@ -1063,10 +2182,14 @@ function loadCharacter(id) {
   rememberImageSources();
   document.querySelector('#accent-hex').value = document.querySelector('#accent').value;
   document.querySelector('#save-label').textContent = 'Update character';
-  document.querySelector('#delete-character').classList.remove('hidden');
+  syncCharacterActions(true);
   localStorage.removeItem(DRAFT_KEY);
   document.querySelector('#autosave-status').textContent = 'Editing saved character';
   characterFormHasChanges = false;
+  document.querySelector('#depth-details').open = Boolean(character.goal || character.fear || character.secret
+    || character.flaw || character.voice || character.appearance);
+  document.querySelector('#profile-extras').open = Boolean(characterBonds(character).length || parseTimeline(character.timeline).length);
+  renderRelationEditors();
   updatePreview();
   document.querySelector('#studio').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -1083,9 +2206,11 @@ function resetForm() {
   rememberImageSources();
   activeId = '';
   document.querySelector('#save-label').textContent = 'Save character';
-  document.querySelector('#delete-character').classList.add('hidden');
+  syncCharacterActions(false);
   document.querySelector('#appearance-details').open = false;
   document.querySelector('#profile-extras').open = false;
+  document.querySelector('#depth-details').open = false;
+  renderRelationEditors();
   localStorage.removeItem(DRAFT_KEY);
   characterFormHasChanges = false;
   document.querySelector('#autosave-status').textContent = 'Draft autosaves here';
@@ -1116,7 +2241,7 @@ function syncToastLayer() {
 
 function updateBackToTopVisibility() {
   const button = document.querySelector('#back-to-top');
-  button.classList.toggle('is-visible', window.scrollY > 360 && !characterDialog.open && !aboutDialog.open && !document.querySelector('#story-dialog').open);
+  button.classList.toggle('is-visible', window.scrollY > 360 && !characterDialog.open && !aboutDialog.open && !changelogDialog.open && !document.querySelector('#story-dialog').open);
 }
 
 document.querySelector('#back-to-top').addEventListener('click', () => {
@@ -1170,6 +2295,123 @@ function handleImageUpload(event) {
     showToast('Could not read this image file. Try another image or paste an image URL.');
   });
   reader.readAsDataURL(file);
+}
+
+let renderedGalleryValue = null;
+
+function imageSummary(value) {
+  if (value.startsWith('data:')) return 'Uploaded image';
+  try {
+    const url = new URL(value);
+    const path = url.pathname.length > 1 ? url.pathname : '';
+    return `${url.hostname.replace(/^www\./, '')}${path.length > 26 ? `${path.slice(0, 26)}…` : path}`;
+  } catch {
+    return 'Image link';
+  }
+}
+
+function syncImageChip(chip, wrap, value, show) {
+  const visible = Boolean(show && value && validImageSource(value));
+  wrap.classList.toggle('has-image', visible);
+  chip.classList.toggle('hidden', !visible);
+  const image = chip.querySelector('img');
+  if (!visible) {
+    if (chip.dataset.src) {
+      chip.dataset.src = '';
+      image.removeAttribute('src');
+    }
+    return;
+  }
+  if (chip.dataset.src !== value) {
+    chip.dataset.src = value;
+    image.classList.remove('hidden');
+    image.onerror = () => image.classList.add('hidden');
+    image.src = value;
+  }
+  const label = chip.querySelector('.upload-chip-text');
+  label.textContent = imageSummary(value);
+  label.title = value.startsWith('data:') ? '' : value;
+}
+
+function syncImageChips() {
+  ['avatar', 'cover'].forEach((kind) => {
+    const field = imageField(kind);
+    const value = field.value.trim();
+    syncImageChip(document.querySelector(`#${kind}-chip`), field.closest('.avatar-input-wrap'), value,
+      value === (field.dataset.confirmedSource || ''));
+  });
+}
+
+function syncStoryImageChip() {
+  const field = document.querySelector('#story-image-url');
+  syncImageChip(document.querySelector('#story-image-chip'), field.closest('.story-image-control'), field.value.trim(), true);
+}
+
+function galleryLines() {
+  return document.querySelector('#gallery').value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+
+function setGalleryLines(lines) {
+  const gallery = document.querySelector('#gallery');
+  gallery.value = lines.join('\n');
+  gallery.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function syncGalleryThumbs() {
+  const gallery = document.querySelector('#gallery');
+  if (renderedGalleryValue === gallery.value) return;
+  renderedGalleryValue = gallery.value;
+  const list = document.querySelector('#gallery-thumbs');
+  list.replaceChildren();
+  galleryLines().forEach((line, index) => {
+    const item = document.createElement('li');
+    item.className = 'gallery-thumb';
+    if (validImageSource(line)) {
+      const image = document.createElement('img');
+      image.alt = `Extra image ${index + 1}`;
+      image.loading = 'lazy';
+      image.title = line.startsWith('data:') ? 'Uploaded image' : line;
+      image.addEventListener('error', () => {
+        image.remove();
+        item.classList.add('is-broken');
+        item.dataset.note = 'Could not load';
+      });
+      image.src = line;
+      item.append(image);
+    } else {
+      item.classList.add('is-broken');
+      item.dataset.note = 'Not an image link';
+    }
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = '×';
+    remove.setAttribute('aria-label', `Remove extra image ${index + 1}`);
+    remove.addEventListener('click', () => setGalleryLines(galleryLines().filter((_, position) => position !== index)));
+    item.append(remove);
+    list.append(item);
+  });
+}
+
+function addGalleryLink() {
+  const input = document.querySelector('#gallery-url');
+  const value = input.value.trim();
+  if (!value) {
+    showToast('Paste an image link first.');
+    input.focus();
+    return;
+  }
+  if (!validWebUrl(value)) {
+    showToast('Use a direct http(s) image link, or upload an image file.');
+    input.focus();
+    return;
+  }
+  if (galleryLines().includes(value)) {
+    showToast('That image is already in the gallery.');
+    return;
+  }
+  setGalleryLines([...galleryLines(), value]);
+  input.value = '';
+  input.focus();
 }
 
 function imageField(kind) {
@@ -1258,6 +2500,7 @@ function closeImageCrop(confirmed) {
   if (pending) imageCandidateDirtyBefore[pending.kind] = null;
   document.querySelector('#image-crop-preview').removeAttribute('src');
   if (imageCropDialog.open) imageCropDialog.close();
+  syncImageChips();
   syncModalScrollLock();
   if (pending?.returnFocus instanceof HTMLElement && pending.returnFocus.isConnected) pending.returnFocus.focus();
 }
@@ -1458,6 +2701,81 @@ document.querySelector('#profile-edit').addEventListener('click', () => {
   requestProfileClose(() => loadCharacter(id));
 });
 
+function renderChangelog() {
+  const list = document.querySelector('#changelog-list');
+  list.replaceChildren();
+  CHANGELOG.forEach((entry, index) => {
+    const card = document.createElement('article');
+    card.className = 'changelog-entry';
+    const header = document.createElement('div');
+    header.className = 'changelog-entry-header';
+    const version = document.createElement('h2');
+    version.textContent = `Version ${entry.version}`;
+    header.append(version);
+    if (index === 0) {
+      const badge = document.createElement('span');
+      badge.className = 'changelog-badge';
+      badge.textContent = 'Latest';
+      header.append(badge);
+    }
+    const date = document.createElement('time');
+    date.textContent = entry.date;
+    date.dateTime = entry.date.replaceAll('/', '-');
+    header.append(date);
+    const notes = document.createElement('ul');
+    entry.notes.forEach((note) => {
+      const item = document.createElement('li');
+      const match = note.match(/^(Lore & Story|Characters|Fixed|Added)(:|\b)/);
+      if (match && match[2] === ':') {
+        const label = document.createElement('strong');
+        label.textContent = `${match[1]}:`;
+        item.append(label, note.slice(match[0].length));
+      } else {
+        item.textContent = note;
+      }
+      notes.append(item);
+    });
+    card.append(header, notes);
+    list.append(card);
+  });
+}
+
+function requestChangelogClose() {
+  if (!changelogDialog.open || changelogDialog.classList.contains('is-closing')) return;
+  changelogDialog.classList.add('is-closing');
+  const delay = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 400;
+  changelogCloseTimer = window.setTimeout(() => {
+    changelogDialog.close();
+    changelogCloseTimer = null;
+  }, delay);
+}
+document.querySelector('#changelog-open').addEventListener('click', (event) => {
+  changelogReturnFocus = event.currentTarget;
+  renderChangelog();
+  changelogDialog.classList.remove('is-closing');
+  changelogDialog.showModal();
+  syncModalScrollLock();
+  changelogDialog.querySelector('.profile-scroll').scrollTop = 0;
+  document.querySelector('#changelog-close').focus();
+});
+document.querySelector('#changelog-close').addEventListener('click', requestChangelogClose);
+changelogDialog.addEventListener('click', (event) => {
+  if (event.target === changelogDialog) requestChangelogClose();
+});
+changelogDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  requestChangelogClose();
+});
+changelogDialog.addEventListener('close', () => {
+  if (changelogCloseTimer) {
+    window.clearTimeout(changelogCloseTimer);
+    changelogCloseTimer = null;
+  }
+  changelogDialog.classList.remove('is-closing');
+  updateBackToTopVisibility();
+  if (changelogReturnFocus instanceof HTMLElement && changelogReturnFocus.isConnected) changelogReturnFocus.focus();
+});
+
 document.querySelector('#about-website').addEventListener('click', (event) => {
   aboutReturnFocus = event.currentTarget;
   aboutDialog.classList.remove('is-closing');
@@ -1518,6 +2836,8 @@ form.addEventListener('submit', (event) => {
     return;
   }
   profile.id = activeId || createId();
+  profile.updatedAt = new Date().toISOString();
+  profile.bonds = serializeBonds(parseBonds(profile.bonds).filter((bond) => bond.id !== profile.id && characters.some((item) => item.id === bond.id)));
   const existingIndex = characters.findIndex((item) => item.id === profile.id);
   const nextCharacters = [...characters];
   if (existingIndex >= 0) nextCharacters[existingIndex] = profile;
@@ -1535,7 +2855,10 @@ form.addEventListener('submit', (event) => {
     showToast('Could not save. Your browser storage may be full.');
     return;
   }
+  const previousSaved = characters.find((item) => item.id === profile.id);
   characters = nextCharacters;
+  if (previousSaved && !(characterVersions[profile.id] || []).length) recordCharacterVersion(previousSaved);
+  recordCharacterVersion(profile);
   rememberImageSources();
   persistCharacterLibrary();
   activeId = profile.id;
@@ -1544,7 +2867,7 @@ form.addEventListener('submit', (event) => {
   characterFormHasChanges = false;
   document.querySelector('#autosave-status').textContent = 'Character saved';
   document.querySelector('#save-label').textContent = 'Update character';
-  document.querySelector('#delete-character').classList.remove('hidden');
+  syncCharacterActions(true);
   renderCharacters();
   updatePreview();
   showToast(`${profile.name} is saved to your cast.`);
@@ -1557,6 +2880,8 @@ const exportFields = [
   ['avatarCrop', 'Portrait crop'], ['coverCrop', 'Cover crop'],
   ['accent', 'Accent'], ['gallery', 'Gallery'], ['relations', 'Relations'],
   ['links', 'Links'], ['worlds', 'Worlds'], ['stats', 'Stats'],
+  ['groups', 'Groups'], ['goal', 'Goal'], ['fear', 'Fear'], ['secret', 'Secret'], ['flaw', 'Flaw'],
+  ['voice', 'Voice'], ['appearance', 'Appearance'], ['bonds', 'Connections'], ['timeline', 'Timeline'],
 ];
 
 function safeFilename(value) {
@@ -1577,7 +2902,10 @@ function toCsv(profiles) {
 function toText(profiles) {
   return profiles.map((profile) => exportFields
     .filter(([key]) => key !== 'id' && profile[key] !== '' && profile[key] != null && (!Array.isArray(profile[key]) || profile[key].length > 0))
-    .map(([key, label]) => `${label}: ${Array.isArray(profile[key]) ? profile[key].join(', ') : profile[key]}`)
+    .map(([key, label]) => `${label}: ${key === 'bonds'
+      ? parseBonds(profile[key]).map((bond) => `${characters.find((item) => item.id === bond.id)?.name || 'Unknown'}${bond.label ? ` (${bond.label})` : ''}`).join(', ')
+      : key === 'timeline' ? parseTimeline(profile[key]).map((event) => `${event.when ? `${event.when}: ` : ''}${event.text}`).join('; ')
+      : Array.isArray(profile[key]) ? profile[key].join(', ') : profile[key]}`)
     .join('\n')).join('\n\n--------------------\n\n');
 }
 
@@ -1789,6 +3117,9 @@ function normalizeCharacter(record) {
   const traits = Array.isArray(rawTraits)
     ? rawTraits.map((trait) => toString(trait, 40)).filter(Boolean)
     : toString(rawTraits, 160).split(/[|,]/).map((trait) => trait.trim()).filter(Boolean);
+  const toList = (raw, itemLimit, max) => (Array.isArray(raw)
+    ? raw.map((item) => toString(item, itemLimit))
+    : toString(raw, 400).split(/[|,]/).map((item) => item.trim().slice(0, itemLimit))).filter(Boolean).slice(0, max);
   const rawAccent = toString(get('accent', 'color', 'card color'), 7);
   const accent = /^#[0-9a-f]{6}$/i.test(rawAccent) ? rawAccent : '#4385e8';
   return {
@@ -1805,12 +3136,22 @@ function normalizeCharacter(record) {
     avatarCrop: serializeImageCrop(normalizeImageCrop(get('avatarCrop', 'portrait crop'))),
     coverCrop: serializeImageCrop(normalizeImageCrop(get('coverCrop'))),
     accent,
-    story: toString(get('story', 'backstory', 'background'), 700),
+    story: toString(get('story', 'backstory', 'background'), 4000),
     gallery: toString(get('gallery', 'images', 'image urls'), MAX_GALLERY_VALUE_LENGTH),
     relations: toString(get('relations', 'relationships'), 700),
     links: toString(get('links', 'url', 'website'), 700),
     worlds: toString(get('worlds', 'world', 'setting'), 700),
     stats: toString(get('stats', 'extra stats'), 700),
+    groups: toList(get('groups', 'group', 'factions', 'faction'), 40, 10),
+    goal: toString(get('goal', 'goals'), 200),
+    fear: toString(get('fear', 'fears'), 200),
+    secret: toString(get('secret', 'secrets'), 300),
+    flaw: toString(get('flaw', 'flaws'), 200),
+    voice: toString(get('voice', 'catchphrase'), 160),
+    appearance: toString(get('appearance', 'looks'), 500),
+    bonds: serializeBonds(parseBonds(toString(get('bonds', 'connections'), 3000))),
+    timeline: serializeTimeline(parseTimeline(toString(get('timeline', 'events', 'life events'), 12000))),
+    updatedAt: toString(get('updatedAt', 'updated at'), 40),
   };
 }
 
@@ -1885,6 +3226,7 @@ function normalizeImportedStory(record, forceDraft = false) {
     backgroundColor: normalizeStoryBackground(record.backgroundColor),
     image: typeof record.image === 'string' ? record.image.slice(0, MAX_IMAGE_DATA_URL_LENGTH) : '',
     updatedAt: typeof record.updatedAt === 'string' && record.updatedAt ? record.updatedAt : new Date().toISOString(),
+    ...normalizeStoryMeta(record),
   };
   if (!story.title && !story.text.trim() && !story.image) return null;
   return { ...story, isDraft: forceDraft || record.status === 'draft' || !story.title };
@@ -1955,6 +3297,25 @@ async function importStories(event) {
   }
 }
 
+function storiesToReadable(items, markdown) {
+  return items.map((story) => {
+    const names = storyCharacterNames(story);
+    const title = story.title || 'Untitled story';
+    const meta = [
+      STORY_KINDS[story.kind], `${STORY_PROGRESS[story.progress] || 'Drafting'}${story.isDraft ? ' (unsaved draft)' : ''}`,
+      story.setting && `Setting: ${story.setting}`,
+      names.length && `Characters: ${names.join(', ')}`,
+      story.tags?.length && `Tags: ${story.tags.join(', ')}`,
+    ].filter(Boolean).join(' · ');
+    return [
+      markdown ? `# ${title}` : `${title}\n${'='.repeat(Math.min(title.length, 60))}`,
+      meta,
+      story.summary && (markdown ? `> ${story.summary}` : story.summary),
+      story.text.trim(),
+    ].filter(Boolean).join('\n\n');
+  }).join(markdown ? '\n\n---\n\n' : '\n\n\n');
+}
+
 function exportStories() {
   const format = document.querySelector('#story-export-format').value;
   const drafts = { ...storyDrafts };
@@ -1974,11 +3335,17 @@ function exportStories() {
     return;
   }
   try {
-    const extension = format === 'yaml' ? 'yaml' : 'json';
-    const content = format === 'yaml' ? toYaml(data) : JSON.stringify(data, null, 2);
-    const mimeType = format === 'yaml' ? 'text/yaml;charset=utf-8' : 'application/json;charset=utf-8';
+    const readable = format === 'md' || format === 'txt';
+    const extension = readable ? format : format === 'yaml' ? 'yaml' : 'json';
+    const content = readable
+      ? storiesToReadable([...data.stories, ...data.drafts.map((draft) => ({ ...draft, isDraft: true }))], format === 'md')
+      : format === 'yaml' ? toYaml(data) : JSON.stringify(data, null, 2);
+    const mimeType = format === 'md' ? 'text/markdown;charset=utf-8' : format === 'txt' ? 'text/plain;charset=utf-8'
+      : format === 'yaml' ? 'text/yaml;charset=utf-8' : 'application/json;charset=utf-8';
     downloadFile(`fable-story-library.${extension}`, content, mimeType);
-    showToast(`Story library and drafts exported as ${extension.toUpperCase()}.`);
+    showToast(readable
+      ? `Stories exported as ${extension.toUpperCase()} for reading. Use JSON or YAML for backups you can import.`
+      : `Story library and drafts exported as ${extension.toUpperCase()}.`);
   } catch {
     showToast('Story export failed. Check browser download permissions.');
   }
@@ -2050,12 +3417,13 @@ function requestDeleteItem(id, kind, item, returnFocus = document.activeElement)
   pendingDeleteKind = kind;
   pendingDeleteFocus = returnFocus;
   const isDraft = kind === 'story' && item.isDraft;
-  const itemType = kind === 'character' ? 'character' : isDraft ? 'draft' : 'story';
+  const hasSavedVersion = kind === 'story' && savedStories.some((story) => story.id === id);
+  const itemType = kind === 'character' ? 'character' : isDraft && !hasSavedVersion ? 'draft' : 'story';
   document.querySelector('#delete-dialog-title').textContent =
     `Delete ${itemType}?`;
   document.querySelector('#delete-dialog-message').textContent =
-    isDraft && savedStories.some((story) => story.id === id)
-      ? `Delete the unfinished draft of ${item.title || 'Untitled story'}? The saved story will remain.`
+    isDraft && hasSavedVersion
+      ? `Delete ${item.title || 'Untitled story'}? This removes the saved story, its unsaved changes, and its version history. This cannot be undone.`
       : `Delete ${item.name || item.title || 'Untitled story'}? This cannot be undone.`;
   document.querySelector('#cancel-delete').textContent = 'Cancel';
   document.querySelector('#confirm-delete').textContent = `Delete ${itemType}`;
@@ -2093,38 +3461,51 @@ document.querySelector('#confirm-delete').addEventListener('click', () => {
   const characterId = pendingDeleteId;
   const kind = pendingDeleteKind;
   if (!characterId || !kind) return;
+  if (kind === 'discard-character') {
+    pendingDeleteFocus = null;
+    deleteDialog.close();
+    resetForm();
+    return;
+  }
   if (kind === 'story') {
-    const draft = storyDrafts[characterId];
-    if (draft) {
-      const nextDrafts = { ...storyDrafts };
-      delete nextDrafts[characterId];
-      if (!writeStorage(STORY_DRAFTS_KEY, nextDrafts)) {
-        showToast('Could not delete this draft. Your browser storage may be unavailable.');
-        return;
-      }
-      delete storyDrafts[characterId];
-      renderStories();
-      deleteDialog.close();
-      showToast('Story draft deleted.');
-      return;
-    }
+    const wasSaved = savedStories.some((story) => story.id === characterId);
     const nextStories = savedStories.filter((story) => story.id !== characterId);
-    if (!writeStorage(STORIES_STORAGE_KEY, nextStories)) {
+    const nextDrafts = { ...storyDrafts };
+    delete nextDrafts[characterId];
+    if (wasSaved && !writeStorage(STORIES_STORAGE_KEY, nextStories)) {
       showToast('Could not delete this story. Your browser storage may be unavailable.');
       return;
     }
+    if (!writeStorage(STORY_DRAFTS_KEY, nextDrafts)) {
+      showToast('Could not remove this story’s draft. Your browser storage may be unavailable.');
+      return;
+    }
     savedStories.splice(0, savedStories.length, ...nextStories);
+    delete storyDrafts[characterId];
+    if (storyVersions[characterId]) {
+      delete storyVersions[characterId];
+      writeStorage(STORY_VERSIONS_KEY, storyVersions);
+    }
+    if (previewStoryId === characterId) previewStoryId = '';
     renderStories();
     deleteDialog.close();
-    showToast('Story deleted.');
+    showToast(wasSaved ? 'Story deleted.' : 'Story draft deleted.');
     return;
   }
-  const nextCharacters = characters.filter((character) => character.id !== characterId);
+  const nextCharacters = characters.filter((character) => character.id !== characterId).map((character) => (
+    parseBonds(character.bonds).some((bond) => bond.id === characterId)
+      ? { ...character, bonds: serializeBonds(parseBonds(character.bonds).filter((bond) => bond.id !== characterId)) }
+      : character
+  ));
   if (!writeStorage(STORAGE_KEY, nextCharacters)) {
     showToast('Could not delete. Your browser storage may be unavailable.');
     return;
   }
   characters = nextCharacters;
+  if (characterVersions[characterId]) {
+    delete characterVersions[characterId];
+    writeStorage(CHARACTER_VERSIONS_KEY, characterVersions);
+  }
   persistCharacterLibrary();
   renderCharacters();
   deleteDialog.close();
@@ -2133,7 +3514,50 @@ document.querySelector('#confirm-delete').addEventListener('click', () => {
 });
 
 document.querySelector('#search-characters').addEventListener('input', renderCharacters);
-['new-character', 'sidebar-new', 'empty-create'].forEach((id) => document.getElementById(id).addEventListener('click', resetForm));
+['new-character', 'sidebar-new', 'empty-create'].forEach((id) => document.getElementById(id).addEventListener('click', (event) => requestNewCharacter(event.currentTarget)));
+document.querySelector('#duplicate-character').addEventListener('click', duplicateCharacter);
+document.querySelector('#bond-add').addEventListener('click', addBondFromEditor);
+document.querySelector('#bond-label').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    addBondFromEditor();
+  }
+});
+['#cast-sort', '#cast-group-filter'].forEach((selector) => document.querySelector(selector).addEventListener('input', renderCharacters));
+document.querySelector('#gallery-url-add').addEventListener('click', addGalleryLink);
+document.querySelector('#gallery-url').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    addGalleryLink();
+  }
+});
+['avatar', 'cover'].forEach((kind) => {
+  document.querySelector(`#${kind}-chip .upload-chip-remove`).addEventListener('click', () => {
+    const field = imageField(kind);
+    field.value = '';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    syncImageChips();
+    field.focus();
+  });
+});
+document.querySelector('#story-image-url').addEventListener('change', syncStoryImageChip);
+document.querySelector('#story-image-chip .upload-chip-remove').addEventListener('click', () => {
+  const field = document.querySelector('#story-image-url');
+  field.value = '';
+  syncStoryImageChip();
+  handleStoryEditorInput();
+  field.focus();
+});
+document.querySelector('#timeline-add').addEventListener('click', addTimelineEvent);
+['#timeline-when', '#timeline-text'].forEach((selector) => document.querySelector(selector).addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    addTimelineEvent();
+  }
+}));
+document.querySelector('#prompt-spark').addEventListener('click', nextCharacterPrompt);
+document.querySelector('#prompt-next').addEventListener('click', nextCharacterPrompt);
+document.querySelector('#prompt-use').addEventListener('click', useCharacterPrompt);
 
 document.querySelector('#new-story').addEventListener('click', (event) => openStoryEditor('', event.currentTarget));
 document.querySelector('#story-empty-create').addEventListener('click', (event) => openStoryEditor('', event.currentTarget));
@@ -2167,6 +3591,21 @@ document.querySelector('#story-form').addEventListener('submit', (event) => {
   saveCurrentStory();
 });
 document.querySelector('#story-close').addEventListener('click', () => document.querySelector('#story-dialog').close());
+document.querySelector('#story-save-close').addEventListener('click', () => {
+  if (saveCurrentStory()) document.querySelector('#story-dialog').close();
+});
+document.querySelector('#story-discard').addEventListener('click', discardStoryChanges);
+document.querySelector('#story-format-bar').addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-format]');
+  if (button) applyStoryFormat(button.dataset.format);
+});
+document.querySelector('#story-starters').addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-starter]');
+  if (button) insertStoryStarter(button.dataset.starter);
+});
+['#story-search', '#story-filter-kind', '#story-filter-progress', '#story-sort'].forEach((selector) => {
+  document.querySelector(selector).addEventListener('input', renderStories);
+});
 document.querySelector('#story-dialog').addEventListener('click', (event) => {
   if (event.target === event.currentTarget) event.currentTarget.close();
 });
@@ -2224,7 +3663,9 @@ if (savedDraft) {
     species: savedDraft.species, description: savedDraft.description, traits: traitsValue(savedDraft.traits),
     avatar: savedDraft.avatar, cover: savedDraft.cover, accent: savedDraft.accent, story: savedDraft.story,
     gallery: savedDraft.gallery, relations: savedDraft.relations, links: savedDraft.links,
-    worlds: savedDraft.worlds, stats: savedDraft.stats,
+    worlds: savedDraft.worlds, stats: savedDraft.stats, groups: traitsValue(savedDraft.groups),
+    goal: savedDraft.goal, fear: savedDraft.fear, secret: savedDraft.secret, flaw: savedDraft.flaw,
+    voice: savedDraft.voice, appearance: savedDraft.appearance, bonds: savedDraft.bonds, timeline: savedDraft.timeline,
   }).forEach(([id, value]) => { document.getElementById(id).value = value || ''; });
   imageCropState = {
     avatar: normalizeImageCrop(savedDraft.avatarCrop),
@@ -2236,7 +3677,7 @@ if (savedDraft) {
     activeId = savedDraft.id;
     document.querySelector('#character-id').value = savedDraft.id;
     document.querySelector('#save-label').textContent = 'Update character';
-    document.querySelector('#delete-character').classList.remove('hidden');
+    syncCharacterActions(true);
   }
 }
 rememberImageSources();
