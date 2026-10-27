@@ -24,6 +24,7 @@
         <a class="nav-link active" href="#studio"><span class="nav-icon">✳</span> Character studio</a>
         <a class="nav-link" href="#cast"><span class="nav-icon">▦</span> Character cards <span class="nav-count" id="sidebar-count">0</span></a>
         <a class="nav-link" href="#lore"><span class="nav-icon">✧</span> Lore &amp; story <span class="nav-count" id="story-sidebar-count">0</span></a>
+        <a class="nav-link" href="#places"><span class="nav-icon">◈</span> Places <span class="nav-count" id="place-sidebar-count">0</span></a>
       </nav>
 
       <div class="sidebar-note">
@@ -32,7 +33,7 @@
         <p class="note-copy">Make a little room for the characters who live in your head.</p>
         <button class="text-button" id="sidebar-new" type="button">Create a character <span>↗</span></button>
       </div>
-      <div class="sidebar-footer"><span class="status-dot"></span> Saved privately on this device</div>
+      <div class="sidebar-footer"><span class="status-dot"></span> Saved privately on this device<span class="storage-meter" id="storage-meter"></span></div>
     </aside>
 
     <main class="main-content">
@@ -247,6 +248,16 @@
               </div>
             </details>
 
+            <details class="optional-section" id="custom-details">
+              <summary><span><strong>Custom sections</strong><small>Add your own sections, like Weapons, Home town, or Favorite food.</small></span><span class="optional-label" id="custom-count">None yet</span></summary>
+              <div class="custom-editor">
+                <div class="custom-suggestions" id="custom-suggestions"><span>Quick add:</span></div>
+                <div class="custom-list" id="custom-list"></div>
+                <button class="button button-quiet" id="custom-add" type="button">＋ Add a section</button>
+                <input id="customSections" name="customSections" type="hidden">
+              </div>
+            </details>
+
             <details class="optional-section" id="character-history-panel">
               <summary><span><strong>Version history</strong><small>A snapshot is kept each time you save (latest 10). Restoring fills the form; nothing changes until you save.</small></span><span class="optional-label" id="character-history-count">None yet</span></summary>
               <ul class="story-history-list" id="character-history-list"></ul>
@@ -254,6 +265,14 @@
 
             <div class="form-actions">
               <button class="button button-primary" type="submit"><span id="save-label">Save character</span><span aria-hidden="true">→</span></button>
+              <label class="export-format character-export-format">Export as
+                <select id="character-export-format" aria-label="Choose character export format">
+                  <option value="json">JSON</option>
+                  <option value="yaml">YAML</option>
+                  <option value="csv">CSV</option>
+                  <option value="txt">Text</option>
+                </select>
+              </label>
               <button class="button button-quiet" id="export-character" type="button">Export character</button>
               <button class="button button-quiet hidden" id="duplicate-character" type="button" title="Start a new character from this one">Duplicate</button>
               <button class="button button-danger hidden" id="delete-character" type="button">Delete character</button>
@@ -283,7 +302,8 @@
               <div class="card-bottom"><span>MADE OF STORIES</span><span class="card-sparkle">✳</span></div>
             </div>
           </article>
-          <p class="preview-caption">A little snapshot of who they are. <span>✦</span></p>
+          <div class="live-sections" id="live-sections" aria-live="polite"></div>
+          <p class="preview-caption">Everything you add shows up here as you type. <span>✦</span></p>
         </aside>
       </section>
       </section>
@@ -295,18 +315,16 @@
             <div class="data-folder-control">
               <button class="button button-quiet" id="connect-data-folder" type="button">Choose data folder</button>
               <span class="data-folder-status" id="data-folder-status" role="status">Using this browser for autosave</span>
-              <span class="data-folder-help">Keeps a library backup file in a folder you choose.</span>
+              <span class="data-folder-help">Keeps one full backup of characters, stories, and places in a folder you choose.</span>
             </div>
             <label class="export-format">Export as
               <select id="export-format" aria-label="Choose export format">
                 <option value="json">JSON</option>
                 <option value="yaml">YAML</option>
-                <option value="csv">CSV</option>
-                <option value="txt">Text</option>
               </select>
             </label>
-            <button class="button button-quiet" id="export-library" type="button">Export all</button>
-            <button class="button button-quiet" id="import-library" type="button" title="Import a JSON, YAML, or CSV backup">Import file</button>
+            <button class="button button-quiet" id="export-library" type="button">Export all data</button>
+            <button class="button button-quiet" id="import-library" type="button" title="Import a full Fable backup">Import backup</button>
             <input class="visually-hidden" id="import-file" type="file" accept=".json,.yaml,.yml,.csv,application/json,text/yaml,text/csv">
             <select class="cast-select hidden" id="cast-group-filter" aria-label="Filter by group"></select>
             <select class="cast-select" id="cast-sort" aria-label="Sort characters">
@@ -358,13 +376,11 @@
             <select id="story-export-format" aria-label="Choose story export format">
               <option value="json">JSON</option>
               <option value="yaml">YAML</option>
-              <option value="md">Markdown (reading)</option>
-              <option value="txt">Plain text (reading)</option>
             </select>
           </label>
-          <button class="button button-quiet" id="story-export" type="button">Export stories &amp; drafts</button>
-          <button class="button button-quiet" id="story-import" type="button">Import file</button>
-          <input class="visually-hidden" id="story-import-file" type="file" accept=".json,.yaml,.yml,application/json,text/yaml">
+          <button class="button button-quiet" id="story-export" type="button">Export all data</button>
+          <button class="button button-quiet" id="story-import" type="button">Import backup</button>
+          <input class="visually-hidden" id="story-import-file" type="file" accept=".json,.yaml,.yml,.csv,application/json,text/yaml,text/csv">
         </div>
         <div class="story-library" id="story-library" aria-live="polite"></div>
         <p class="story-no-results hidden" id="story-no-results">No stories match those filters. Try clearing the search or choosing “All types”.</p>
@@ -375,7 +391,53 @@
           <button class="button button-outline" id="story-empty-create" type="button">＋ Write your first story</button>
         </div>
       </section>
-      <footer class="page-footer"><span>FABLE STUDIO</span><span>Made for the characters who won't leave you alone. <b>✦</b></span></footer>
+      <section class="lore-section places-section" id="places" aria-labelledby="places-title">
+        <div class="section-heading lore-heading">
+          <div><p class="eyebrow">BUILD YOUR WORLD</p><h2 id="places-title">Places &amp; Settings <span id="place-count">(0)</span></h2></div>
+          <div class="lore-heading-actions">
+            <button class="button button-primary" id="new-place" type="button"><span>＋</span> New place</button>
+          </div>
+        </div>
+        <p class="lore-intro">Describe the cities, buildings, and wild corners your characters live in.</p>
+        <div class="story-filter-bar hidden" id="place-filter-bar">
+          <label class="search-box"><span aria-hidden="true">⌕</span><input id="place-search" type="search" placeholder="Find a place, tag, or character…" aria-label="Find a place"></label>
+          <select id="place-filter-kind" aria-label="Filter by type"><option value="">All types</option><option value="region">Region or realm</option><option value="city">City or town</option><option value="building">Building</option><option value="landmark">Landmark</option><option value="wild">Wilderness</option><option value="other">Other</option></select>
+          <select id="place-sort" aria-label="Sort places">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="name">Name A–Z</option>
+          </select>
+        </div>
+        <div class="story-library-tools">
+          <label class="export-format">Export as
+            <select id="place-export-format" aria-label="Choose place export format">
+              <option value="json">JSON</option>
+              <option value="yaml">YAML</option>
+            </select>
+          </label>
+          <button class="button button-quiet" id="place-export" type="button">Export all data</button>
+          <button class="button button-quiet" id="place-import" type="button">Import backup</button>
+          <input class="visually-hidden" id="place-import-file" type="file" accept=".json,.yaml,.yml,.csv,application/json,text/yaml,text/csv" tabindex="-1">
+        </div>
+        <div class="story-library" id="place-library" aria-live="polite"></div>
+        <p class="story-no-results hidden" id="place-no-results">No places match those filters. Try clearing the search or choosing “All types”.</p>
+        <div class="story-empty" id="place-empty">
+          <div class="empty-icon">◈</div>
+          <h3>Your world is waiting.</h3>
+          <p>Add a city, a house, or a forest. Say how it looks and feels, and link the characters who belong there.</p>
+          <button class="button button-outline" id="place-empty-create" type="button">＋ Create your first place</button>
+        </div>
+      </section>
+      <footer class="page-footer">
+        <div class="page-footer-left">
+          <span>FABLE STUDIO</span>
+          <button class="reset-content-button" id="reset-content" type="button" aria-describedby="reset-content-help">
+            <span>Hold to reset all content</span>
+          </button>
+          <span class="reset-content-help" id="reset-content-help">Hold for 1.4 seconds to open the confirmation.</span>
+        </div>
+        <span>Made for the characters who won't leave you alone. <b>✦</b></span>
+      </footer>
     </main>
   </div>
   <button class="back-to-top" id="back-to-top" type="button" aria-label="Scroll back to top" title="Back to top">
@@ -436,6 +498,7 @@
             <summary>Timeline <span class="profile-section-icon">⌄</span></summary>
             <div class="profile-section-content"><ol class="profile-timeline" id="profile-timeline"></ol></div>
           </details>
+          <div id="profile-custom-sections"></div>
           <details class="profile-section">
             <summary>Links <span class="profile-section-icon">⌄</span></summary>
             <div class="profile-section-content"><div class="profile-links" id="profile-links"></div></div>
@@ -448,7 +511,22 @@
             <summary>Stories <span class="profile-section-icon">⌄</span></summary>
             <div class="profile-section-content"><div class="profile-story-links" id="profile-stories"></div></div>
           </details>
+          <details class="profile-section">
+            <summary>Places <span class="profile-section-icon">⌄</span></summary>
+            <div class="profile-section-content"><div class="profile-story-links" id="profile-places"></div></div>
+          </details>
         </nav>
+      </div>
+    </div>
+  </dialog>
+  <dialog class="confirm-dialog reset-dialog" id="reset-dialog" aria-labelledby="reset-dialog-title" aria-describedby="reset-dialog-message">
+    <div class="confirm-dialog-content">
+      <span class="confirm-dialog-icon" aria-hidden="true">!</span>
+      <h2 id="reset-dialog-title">Reset all Fable content?</h2>
+      <p id="reset-dialog-message">This permanently removes all characters, stories, places, drafts, version history, and saved preferences from this browser, along with the connected Fable backup file. Export a backup first if you may want this content later.</p>
+      <div class="confirm-dialog-actions">
+        <button class="button button-quiet" id="cancel-reset" type="button">Keep my content</button>
+        <button class="button button-danger" id="confirm-reset" type="button">Erase all content</button>
       </div>
     </div>
   </dialog>
@@ -527,6 +605,10 @@
             <div class="story-wide-field">
               <span class="story-field-label" id="story-characters-label">Characters in this story</span>
               <div class="story-character-picker" id="story-characters" role="group" aria-labelledby="story-characters-label"></div>
+            </div>
+            <div class="story-wide-field">
+              <span class="story-field-label" id="story-places-label">Places in this story</span>
+              <div class="story-character-picker" id="story-places" role="group" aria-labelledby="story-places-label"></div>
             </div>
           </div>
         </details>
@@ -633,7 +715,7 @@
         <div class="about-guide-content">
         <section class="about-guide-step">
           <span class="creation-step-number">01</span>
-          <div><h2>Create a character</h2><p>Click <strong>New character</strong> and type a name. Add as much or as little as you like. The preview updates while you type. When you are ready, click <strong>Save character</strong>. You can edit your character at any time. Want more detail? Open <strong>Go deeper</strong> or <strong>More profile sections</strong> to add goals, fears, connections, a timeline, and extra images.</p></div>
+          <div><h2>Create a character</h2><p>Click <strong>New character</strong> and type a name. Add as much or as little as you like. The preview updates while you type. When you are ready, click <strong>Save character</strong>. You can edit your character at any time. Want more detail? Open <strong>Go deeper</strong> or <strong>More profile sections</strong> to add goals, fears, connections, a timeline, extra images, and your own custom sections.</p></div>
         </section>
         <section class="about-guide-step">
           <span class="creation-step-number">02</span>
@@ -645,21 +727,80 @@
         </section>
         <section class="about-guide-step">
           <span class="creation-step-number">04</span>
-          <div><h2>Add details to a story</h2><p>Under <strong>Story details</strong>, choose a type, write a short summary, add tags, and pick the characters in the story. Click <strong>＋ Chapter</strong> to split a long story into parts. Each time you save, a copy is kept in <strong>Version history</strong>, so you can go back to an older version.</p></div>
+          <div><h2>Add details to a story</h2>          <p>Under <strong>Story details</strong>, choose a type, write a short summary, add tags, and pick the characters and places in the story. Click <strong>＋ Chapter</strong> to split a long story into parts. Each time you save, a copy is kept in <strong>Version history</strong>, so you can go back to an older version.</p></div>
         </section>
         <section class="about-guide-step">
           <span class="creation-step-number">05</span>
-          <div><h2>Save as PDF</h2><p>Open a character profile or a story preview. Click <strong>Print / Save PDF</strong>, then choose <strong>Save as PDF</strong> as the printer. A PDF is a copy for reading or sharing. It does not replace your saved work.</p></div>
+          <div><h2>Add places</h2><p>Go to <strong>Places &amp; Settings</strong> and click <strong>New place</strong>. Give it a name, choose a type, and describe how it looks and feels. You can link the characters who belong there. Linked places also show on each character’s profile.</p></div>
         </section>
         <section class="about-guide-step">
           <span class="creation-step-number">06</span>
-          <div><h2>Back up and import</h2><p>In <strong>Character Cards</strong>, pick a format and click <strong>Export all</strong>. In <strong>Lore &amp; Story</strong>, click <strong>Export stories &amp; drafts</strong>. Use JSON or YAML for a backup you can import later. CSV, Text, and Markdown files are mainly for reading or sharing. To restore a backup, click <strong>Import file</strong>. New items are added, and items you already have are updated.</p></div>
+          <div><h2>Save as PDF</h2><p>Open a character profile or a story preview. Click <strong>Print / Save PDF</strong>, then choose <strong>Save as PDF</strong> as the printer. A PDF is a copy for reading or sharing. It does not replace your saved work.</p></div>
+        </section>
+        <section class="about-guide-step">
+          <span class="creation-step-number">07</span>
+          <div><h2>Back up and import</h2><p>From Character Cards, Lore &amp; Story, or Places &amp; Settings, click <strong>Export all data</strong> to save one JSON or YAML backup of your characters, stories, drafts, places, and links. <strong>Import backup</strong> restores or updates matching items and adds new ones. Uploaded images and imported backups must be 5 MB or smaller.</p></div>
         </section>
           <aside class="about-note">
             <span class="status-dot" aria-hidden="true"></span>
             <p><strong>Good to know:</strong> your work is saved in this browser only. If you clear your browser data, it can be lost. Export a backup often to stay safe.</p>
           </aside>
         </div>
+      </div>
+    </div>
+  </dialog>
+  <dialog class="character-dialog about-dialog place-dialog" id="place-dialog" aria-labelledby="place-title">
+    <div class="profile-window">
+      <div class="profile-window-toolbar">
+        <span class="about-toolbar-label">PLACES &amp; SETTINGS</span>
+        <button class="profile-close" id="place-close" type="button" aria-label="Close place editor">×</button>
+      </div>
+      <div class="profile-scroll about-scroll">
+        <header class="about-hero">
+          <p class="eyebrow"><span class="eyebrow-line"></span> BUILD YOUR WORLD</p>
+          <h1 id="place-title">A new <em>place.</em></h1>
+          <p>Describe it the way you picture it. Only the name is required.</p>
+        </header>
+        <form class="place-form" id="place-form" autocomplete="off">
+          <div class="place-row">
+            <label class="field">Name<input id="place-name" name="name" type="text" maxlength="80" required placeholder="e.g. The Drowned City of Veyra"></label>
+            <label class="field">Type<select id="place-kind" name="kind"><option value="region">Region or realm</option><option value="city">City or town</option><option value="building">Building</option><option value="landmark">Landmark</option><option value="wild">Wilderness</option><option value="other">Other</option></select></label>
+          </div>
+          <div class="place-row">
+            <label class="field">Part of <input id="place-part-of" name="partOf" type="text" maxlength="80" placeholder="e.g. The Northern Reach"></label>
+            <label class="field">Tags <input id="place-tags" name="tags" type="text" maxlength="200" placeholder="e.g. port, haunted, trade"></label>
+          </div>
+          <label class="field">One-line summary<input id="place-summary" name="summary" type="text" maxlength="240" placeholder="What is this place, in a sentence?"></label>
+          <label class="field">Description <span class="field-hint inline-hint"><span id="place-description-count">0</span> / 8000</span>
+            <textarea id="place-description" name="description" rows="6" maxlength="8000" placeholder="What does it look like? Who lives here? What happens here?"></textarea>
+          </label>
+          <label class="field">Lore &amp; story <span class="field-hint inline-hint"><span id="place-lore-count">0 words</span></span>
+            <textarea id="place-lore" name="lore" rows="8" maxlength="30000" placeholder="Write the history, legends, scenes, or stories tied to this place."></textarea>
+          </label>
+          <label class="field">Atmosphere <span class="field-hint inline-hint">Sights, sounds, and smells</span>
+            <textarea id="place-atmosphere" name="atmosphere" rows="2" maxlength="400" placeholder="Salt wind, creaking docks, and the smell of tar."></textarea>
+          </label>
+          <label class="field">Secrets, rules, or history
+            <textarea id="place-notes" name="notes" rows="3" maxlength="4000" placeholder="Anything else worth remembering about this place."></textarea>
+          </label>
+          <div class="field">
+            <span class="story-field-label" id="place-characters-label">Characters linked to this place</span>
+            <div class="story-character-picker" id="place-characters" role="group" aria-labelledby="place-characters-label"></div>
+          </div>
+          <div class="field">
+            <label for="place-image-url">Image</label>
+            <span class="story-image-control">
+              <input id="place-image-url" name="image" type="text" placeholder="Paste an image link, or upload with ↑"><span class="upload-chip hidden" id="place-image-chip"><img alt=""><span class="upload-chip-text"></span><button class="upload-chip-remove" type="button" aria-label="Remove place image">Remove</button></span>
+              <button class="upload-button" id="place-image-upload-button" type="button" aria-label="Upload a place image">↑</button>
+            </span>
+            <input class="visually-hidden" id="place-image-file" type="file" accept="image/*" tabindex="-1">
+          </div>
+          <div class="place-actions">
+            <button class="button button-quiet hidden" id="place-delete" type="button">Delete place</button>
+            <button class="button button-outline" id="place-cancel" type="button">Cancel</button>
+            <button class="button button-primary" id="place-save" type="submit">Save place</button>
+          </div>
+        </form>
       </div>
     </div>
   </dialog>
