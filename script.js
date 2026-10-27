@@ -3,6 +3,7 @@ const DRAFT_KEY = 'fable.draft.v1';
 const STORIES_STORAGE_KEY = 'fable.stories.v1';
 const STORY_DRAFTS_KEY = 'fable.story-drafts.v1';
 const MAX_IMAGE_UPLOAD_BYTES = 5 * 1024 * 1024;
+const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_IMAGE_DATA_URL_LENGTH = Math.ceil(MAX_IMAGE_UPLOAD_BYTES * 4 / 3) + 1000;
 const MAX_GALLERY_VALUE_LENGTH = 20_000_000;
 const FOLDER_DB_NAME = 'fable.character-data';
@@ -40,6 +41,17 @@ let changelogReturnFocus = null;
 // Add new releases at the top, using the same fields: version, date, notes.
 const CHANGELOG = [
   {
+    version: '0.2.7.1',
+    date: '2026/10/27',
+    notes: [
+      'Backups: export and import one JSON or YAML file containing your characters, stories, drafts, places, and links from any library section.',
+      'Places: added a Lore & Story field with a live word count and autosaved drafts that can be recovered or included in backups.',
+      'Connections: link stories to places and see related stories and places in both libraries; deleting a place also clears its story links.',
+      'Images: uploads and imported backup files can now be up to 5 MB.',
+      'Added: a footer reset button opens after a 1.4-second hold, then requires a separate confirmation before clearing saved Fable content.',
+    ],
+  },
+  {
     version: '0.2.5',
     date: '2026/10/26',
     notes: [
@@ -56,6 +68,13 @@ const CHANGELOG = [
       'Images: uploaded profile pictures, covers, story covers and extra images now show as thumbnails with a Remove button, instead of a block of raw text. Extra images can also be added by link.',
       'Fixed: deleting a story now removes it completely in one step, instead of leaving a leftover card.',
       'Fixed: editing a character with a portrait but no cover no longer copies the portrait into the cover.',
+      'Places & Settings: a new section below Lore & Story for cities, buildings and other locations. Add a type, summary, description, atmosphere, notes, tags, an image, and the characters who belong there. Linked places show on character profiles.',
+      'Characters: added custom sections. Name your own sections (like Weapons or Home town) and they appear on the profile.',
+      'Characters: rebuilt the live profile preview. It now shows everything you add (backstory, depth, timeline, connections, links, extra images, custom sections and more) as you type.',
+      'Performance: typing feels faster in every editor. Drafts now save in short batches instead of on every keystroke, searches wait a moment before filtering, and image previews no longer reload on each keystroke.',
+      'Images: uploaded pictures, covers and gallery images are now resized and compressed when you upload them (transparent PNGs stay transparent), so far more fit in your browser storage.',
+      'Tweaks: press Ctrl/Cmd+S to save your character, story or place. The sidebar shows how much browser storage you have used. Your sort and export choices are remembered.',
+      'Fixed: deleting a character now also removes them from story and place links.',
       'About the Website: rewrote the guide in simpler words, removed the side menu, and restyled it to match the rest of the site.',
       'Added this changelog.',
     ],
@@ -98,6 +117,7 @@ let imageCropRequestId = 0;
 const imageCandidateDirtyBefore = { avatar: null, cover: null };
 let dataDirectory = null;
 let folderWritePending = Promise.resolve();
+let folderBackupTimer = 0;
 const STORY_FONTS = {
   playfair: "'Playfair Display', Georgia, serif",
   'dm-sans': "'DM Sans', sans-serif",
@@ -134,6 +154,7 @@ function normalizeStoryMeta(record = {}) {
     setting: typeof record.setting === 'string' ? record.setting.trim().slice(0, 160) : '',
     tags: parseStoryList(record.tags, 12, 24),
     characterIds: parseStoryList(record.characterIds, 40, 100),
+    placeIds: parseStoryList(record.placeIds, 60, 100),
   };
 }
 
@@ -141,12 +162,19 @@ function storyMetaEqual(a, b) {
   const sorted = (list) => JSON.stringify([...(list || [])].sort());
   return a.kind === b.kind && a.progress === b.progress && a.summary === b.summary
     && a.setting === b.setting && sorted(a.tags) === sorted(b.tags)
-    && sorted(a.characterIds) === sorted(b.characterIds);
+    && sorted(a.characterIds) === sorted(b.characterIds)
+    && sorted(a.placeIds) === sorted(b.placeIds);
 }
 
 function storyCharacterNames(story) {
   return (story?.characterIds || [])
     .map((id) => characters.find((character) => character.id === id)?.name)
+    .filter(Boolean);
+}
+
+function storyPlaceNames(story) {
+  return (story?.placeIds || [])
+    .map((id) => places.find((place) => place.id === id)?.name)
     .filter(Boolean);
 }
 
@@ -305,6 +333,7 @@ const CHARACTER_VERSIONS_KEY = 'fable.character-versions.v1';
 const CHARACTER_SNAPSHOT_FIELDS = [
   'name', 'role', 'pronouns', 'age', 'species', 'description', 'traits', 'story', 'relations', 'links',
   'worlds', 'stats', 'groups', 'goal', 'fear', 'secret', 'flaw', 'voice', 'appearance', 'bonds', 'timeline',
+  'customSections',
 ];
 const CHARACTER_PROMPTS = {
   goal: ['What does {name} want more than anything, and what would they give up to get it?', 'What is {name} working toward that nobody else knows about?', 'If {name} could change one thing about their life tomorrow, what would it be?'],
@@ -329,7 +358,7 @@ function normalizeCharacterVersions(value) {
           const raw = item.data[key];
           data[key] = Array.isArray(raw)
             ? raw.map((entry) => String(entry).slice(0, 60)).slice(0, 30)
-            : String(raw ?? '').slice(0, 6000);
+            : String(raw ?? '').slice(0, 30000);
         });
         return {
           at: typeof item.at === 'string' ? item.at : '',
@@ -343,6 +372,56 @@ function normalizeCharacterVersions(value) {
 }
 
 const characterVersions = normalizeCharacterVersions(readStorage(CHARACTER_VERSIONS_KEY, {}));
+
+const PLACES_STORAGE_KEY = 'fable.places.v1';
+const PLACE_DRAFT_KEY = 'fable.place-draft.v1';
+const PLACE_KINDS = {
+  region: 'Region or realm', city: 'City or town', building: 'Building',
+  landmark: 'Landmark', wild: 'Wilderness', other: 'Other',
+};
+const CUSTOM_SUGGESTIONS = ['Weapons', 'Home town', 'Hobbies', 'Favorites', 'Quotes', 'Theme song'];
+
+function normalizePlace(record) {
+  if (!record || typeof record !== 'object') return null;
+  const text = (value, limit) => (typeof value === 'string' ? value.trim().slice(0, limit) : '');
+  const name = text(record.name, 80);
+  if (!name) return null;
+  const image = text(record.image, MAX_IMAGE_DATA_URL_LENGTH);
+  return {
+    id: text(record.id, 100) || createId(),
+    name,
+    kind: PLACE_KINDS[record.kind] ? record.kind : 'other',
+    partOf: text(record.partOf, 80),
+    summary: text(record.summary, 240),
+    description: text(record.description, 8000),
+    lore: text(record.lore, 30000),
+    atmosphere: text(record.atmosphere, 400),
+    notes: text(record.notes, 4000),
+    tags: parseStoryList(record.tags, 12, 24),
+    characterIds: parseStoryList(record.characterIds, 60, 100),
+    image: image.length <= MAX_IMAGE_DATA_URL_LENGTH && validImageSource(image) ? image : '',
+    updatedAt: text(record.updatedAt, 40),
+  };
+}
+
+const places = (Array.isArray(readStorage(PLACES_STORAGE_KEY, [])) ? readStorage(PLACES_STORAGE_KEY, []) : [])
+  .map(normalizePlace).filter(Boolean);
+const storedPlaceDrafts = readStorage(PLACE_DRAFT_KEY, {});
+const placeDrafts = {};
+const storedPlaceDraftRecords = Array.isArray(storedPlaceDrafts) ? storedPlaceDrafts
+  : storedPlaceDrafts && typeof storedPlaceDrafts === 'object' && typeof storedPlaceDrafts.id === 'string'
+    ? [storedPlaceDrafts] : Object.values(storedPlaceDrafts || {});
+storedPlaceDraftRecords.forEach((draft) => {
+  if (!draft || typeof draft !== 'object') return;
+  const normalized = normalizePlace({ ...draft, name: draft.name || 'Untitled place' });
+  if (normalized) placeDrafts[normalized.id] = { ...normalized, name: typeof draft.name === 'string' ? draft.name : '' };
+});
+let activePlaceId = '';
+let placeHasChanges = false;
+let placeDraftTimer = 0;
+let placeDraftPending = false;
+let placeReturnFocus = null;
+let placeCloseTimer = null;
 let activeStoryId = '';
 let storyReturnFocus = null;
 let previewStoryId = '';
@@ -359,6 +438,7 @@ const modalDialogs = [
   characterDialog,
   aboutDialog,
   changelogDialog,
+  document.querySelector('#place-dialog'),
   deleteDialog,
   imageCropDialog,
   document.querySelector('#story-dialog'),
@@ -410,7 +490,20 @@ function hasWorkInProgress() {
   return Boolean(hasCharacterDraft || characterFormHasChanges || hasOpenStoryDraft);
 }
 
+window.addEventListener('pagehide', () => {
+  flushPendingDrafts();
+  flushPlaceDraft();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    flushPendingDrafts();
+    flushPlaceDraft();
+  }
+});
+
 window.addEventListener('beforeunload', (event) => {
+  flushPendingDrafts();
+  flushPlaceDraft();
   if (!hasWorkInProgress()) return;
   event.preventDefault();
   event.returnValue = 'You have work in progress. Reloading may discard your latest changes.';
@@ -650,9 +743,761 @@ function useCharacterPrompt() {
   field.focus({ preventScroll: true });
 }
 
+function parseCustomSections(value, keepEmpty = false) {
+  let list;
+  try { list = JSON.parse(value || '[]'); } catch { list = []; }
+  if (!Array.isArray(list)) return [];
+  const cleaned = list.filter((item) => item && typeof item === 'object').map((item) => ({
+    title: String(item.title ?? '').slice(0, 40),
+    text: String(item.text ?? '').slice(0, 2000),
+  }));
+  const result = keepEmpty ? cleaned : cleaned
+    .map((item) => ({ title: item.title.trim(), text: item.text.trim() })).filter((item) => item.title || item.text);
+  return result.slice(0, 12);
+}
+
+function serializeCustomSections(list) {
+  return list.length ? JSON.stringify(list) : '';
+}
+
+function setCustomSections(list, focusIndex = -1) {
+  document.querySelector('#customSections').value = serializeCustomSections(list);
+  characterFormHasChanges = true;
+  renderCustomEditor(focusIndex);
+  updatePreview();
+  saveDraft();
+}
+
+function renderCustomEditor(focusIndex = -1) {
+  const hidden = document.querySelector('#customSections');
+  const list = parseCustomSections(hidden.value, true);
+  const box = document.querySelector('#custom-list');
+  box.replaceChildren();
+  document.querySelector('#custom-count').textContent = list.length
+    ? `${list.length} section${list.length === 1 ? '' : 's'}` : 'None yet';
+  document.querySelector('#custom-add').disabled = list.length >= 12;
+  const suggestions = document.querySelector('#custom-suggestions');
+  if (!suggestions.querySelector('button')) {
+    CUSTOM_SUGGESTIONS.forEach((title) => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.textContent = title;
+      chip.addEventListener('click', () => {
+        const current = parseCustomSections(hidden.value, true);
+        if (current.length >= 12) { showToast('You can add up to 12 custom sections.'); return; }
+        if (current.some((item) => item.title.trim().toLowerCase() === title.toLowerCase())) {
+          showToast(`You already have a “${title}” section.`);
+          return;
+        }
+        setCustomSections([...current, { title, text: '' }], current.length);
+      });
+      suggestions.append(chip);
+    });
+  }
+  const readRows = () => [...box.querySelectorAll('.custom-row')].map((row) => ({
+    title: row.querySelector('.custom-title').value.slice(0, 40),
+    text: row.querySelector('.custom-text').value.slice(0, 2000),
+  }));
+  list.forEach((section, index) => {
+    const row = document.createElement('div');
+    row.className = 'custom-row';
+    const head = document.createElement('div');
+    head.className = 'custom-row-head';
+    const title = document.createElement('input');
+    title.className = 'custom-title';
+    title.type = 'text';
+    title.maxLength = 40;
+    title.placeholder = 'Section title, e.g. Weapons';
+    title.setAttribute('aria-label', `Title of custom section ${index + 1}`);
+    title.value = section.title;
+    const makeButton = (label, aria, handler, disabled = false) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.disabled = disabled;
+      button.setAttribute('aria-label', aria);
+      button.addEventListener('click', handler);
+      return button;
+    };
+    const move = (direction) => {
+      const next = readRows();
+      [next[index], next[index + direction]] = [next[index + direction], next[index]];
+      setCustomSections(next);
+    };
+    head.append(
+      title,
+      makeButton('↑', 'Move section up', () => move(-1), index === 0),
+      makeButton('↓', 'Move section down', () => move(1), index === list.length - 1),
+      makeButton('×', 'Remove section', () => setCustomSections(readRows().filter((_, position) => position !== index))),
+    );
+    const text = document.createElement('textarea');
+    text.className = 'custom-text';
+    text.maxLength = 2000;
+    text.rows = 3;
+    text.placeholder = 'Write anything you like…';
+    text.setAttribute('aria-label', `Content of custom section ${index + 1}`);
+    text.value = section.text;
+    [title, text].forEach((field) => field.addEventListener('input', () => {
+      hidden.value = serializeCustomSections(readRows());
+    }));
+    row.append(head, text);
+    box.append(row);
+  });
+  if (focusIndex >= 0) box.querySelectorAll('.custom-title')[focusIndex]?.focus();
+}
+
+function addBlankCustomSection() {
+  const current = parseCustomSections(document.querySelector('#customSections').value, true);
+  if (current.length >= 12) { showToast('You can add up to 12 custom sections.'); return; }
+  setCustomSections([...current, { title: '', text: '' }], current.length);
+}
+
+function renderProfileCustom(profile) {
+  const box = document.querySelector('#profile-custom-sections');
+  box.replaceChildren();
+  parseCustomSections(profile.customSections).forEach((section) => {
+    const details = document.createElement('details');
+    details.className = 'profile-section';
+    const summary = document.createElement('summary');
+    summary.append(section.title || 'Untitled section');
+    const icon = document.createElement('span');
+    icon.className = 'profile-section-icon';
+    icon.textContent = '⌄';
+    summary.append(' ', icon);
+    const body = document.createElement('div');
+    body.className = 'profile-section-content';
+    const paragraph = document.createElement('p');
+    paragraph.className = 'profile-custom-text';
+    paragraph.textContent = section.text || 'Nothing written yet.';
+    body.append(paragraph);
+    details.append(summary, body);
+    box.append(details);
+  });
+}
+
+const liveSectionCache = new Map();
+
+function liveTextBlock(text) {
+  const paragraph = document.createElement('p');
+  paragraph.className = 'live-text';
+  paragraph.textContent = text;
+  return paragraph;
+}
+
+function liveRowList(rows) {
+  const list = document.createElement('ul');
+  list.className = 'live-rows';
+  rows.forEach(({ title, detail, href }) => {
+    const item = document.createElement('li');
+    let name;
+    if (href) {
+      name = document.createElement('a');
+      name.href = href;
+      name.target = '_blank';
+      name.rel = 'noopener noreferrer';
+    } else {
+      name = document.createElement('strong');
+    }
+    name.textContent = title;
+    item.append(name);
+    if (detail) {
+      const small = document.createElement('span');
+      small.textContent = detail;
+      item.append(small);
+    }
+    list.append(item);
+  });
+  return list;
+}
+
+function buildLiveSections(profile) {
+  const sections = [];
+  const add = (key, title, signature, build) => sections.push({ key, title, sig: JSON.stringify(signature), build });
+  if (profile.story) add('story', 'Backstory', profile.story, () => liveTextBlock(profile.story));
+  const depth = [['Goal', profile.goal], ['Fear', profile.fear], ['Secret', profile.secret], ['Flaw', profile.flaw],
+    ['Voice', profile.voice], ['Appearance', profile.appearance]].filter(([, value]) => value);
+  if (depth.length) {
+    add('depth', 'Depth', depth, () => {
+      const list = document.createElement('dl');
+      list.className = 'live-dl';
+      depth.forEach(([label, value]) => {
+        const wrap = document.createElement('div');
+        const term = document.createElement('dt');
+        term.textContent = label;
+        const detail = document.createElement('dd');
+        detail.textContent = value;
+        wrap.append(term, detail);
+        list.append(wrap);
+      });
+      return list;
+    });
+  }
+  const events = parseTimeline(profile.timeline);
+  if (events.length) {
+    add('timeline', 'Timeline', events, () => {
+      const list = document.createElement('ol');
+      list.className = 'profile-timeline';
+      events.forEach((event) => {
+        const item = document.createElement('li');
+        const when = document.createElement('span');
+        when.className = 'profile-timeline-when';
+        when.textContent = event.when || '·';
+        const text = document.createElement('p');
+        text.textContent = event.text;
+        item.append(when, text);
+        list.append(item);
+      });
+      return list;
+    });
+  }
+  const connections = characterBonds(profile).map((bond) => ({
+    title: characters.find((item) => item.id === bond.id).name, detail: bond.label || 'Connected',
+  }));
+  if (profile.id) {
+    characters.forEach((other) => {
+      if (other.id === profile.id || characterBonds(profile).some((bond) => bond.id === other.id)) return;
+      const back = characterBonds(other).find((bond) => bond.id === profile.id);
+      if (back) connections.push({ title: other.name, detail: `${back.label || 'Connected'} · added on ${other.name}’s profile` });
+    });
+  }
+  if (connections.length) add('connections', 'Connections', connections, () => liveRowList(connections));
+  const stats = (profile.stats || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+    const index = line.indexOf(':');
+    return index > 0 ? { title: line.slice(0, index).trim(), detail: line.slice(index + 1).trim() } : { title: line, detail: '' };
+  });
+  if (stats.length) add('stats', 'Stats', stats, () => liveRowList(stats));
+  if (profile.relations) add('relations', 'Relationships', profile.relations, () => liveTextBlock(profile.relations));
+  if (profile.worlds) add('worlds', 'Worlds', profile.worlds, () => liveTextBlock(profile.worlds));
+  if (profile.id) {
+    const linkedPlaces = places.filter((place) => place.characterIds.includes(profile.id))
+      .map((place) => ({ title: place.name, detail: PLACE_KINDS[place.kind] }));
+    if (linkedPlaces.length) add('places', 'Places', linkedPlaces, () => liveRowList(linkedPlaces));
+    const linkedStories = savedStories.filter((story) => (story.characterIds || []).includes(profile.id))
+      .map((story) => ({ title: story.title || 'Untitled story', detail: `${STORY_KINDS[story.kind] || 'Story'} · ${STORY_PROGRESS[story.progress] || 'Drafting'}` }));
+    if (linkedStories.length) add('stories', 'Stories', linkedStories, () => liveRowList(linkedStories));
+  }
+  const links = (profile.links || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+    const parts = line.split('|').map((part) => part.trim());
+    const url = parts.length > 1 ? parts.pop() : parts[0];
+    return validWebUrl(url) ? { title: parts.length ? parts.join(' | ') : url, href: url } : null;
+  }).filter(Boolean);
+  if (links.length) add('links', 'Links', links, () => liveRowList(links));
+  const gallery = (profile.gallery || '').split(/\r?\n/).map((line) => line.trim()).filter(validImageSource);
+  if (gallery.length) {
+    add('gallery', 'Extra images', gallery.map((line) => `${line.length}:${line.slice(0, 40)}:${line.slice(-40)}`), () => {
+      const list = document.createElement('ul');
+      list.className = 'live-gallery';
+      gallery.forEach((line, index) => {
+        const item = document.createElement('li');
+        const image = document.createElement('img');
+        image.alt = `Extra image ${index + 1}`;
+        image.loading = 'lazy';
+        image.addEventListener('error', () => item.remove());
+        image.src = line;
+        item.append(image);
+        list.append(item);
+      });
+      return list;
+    });
+  }
+  parseCustomSections(profile.customSections).forEach((section, index) => {
+    add(`custom-${index}`, section.title || 'Untitled section', section, () => liveTextBlock(section.text || 'Nothing written yet.'));
+  });
+  return sections;
+}
+
+function renderLiveSections(profile) {
+  const container = document.querySelector('#live-sections');
+  const sections = buildLiveSections(profile);
+  const nodes = sections.map(({ key, title, sig, build }) => {
+    const cached = liveSectionCache.get(key);
+    if (cached && cached.sig === sig && cached.title === title) return cached.node;
+    const details = document.createElement('details');
+    details.className = 'live-section';
+    details.open = cached ? cached.node.open : true;
+    const summary = document.createElement('summary');
+    summary.textContent = title;
+    const body = document.createElement('div');
+    body.className = 'live-body';
+    body.append(build());
+    details.append(summary, body);
+    liveSectionCache.set(key, { sig, title, node: details });
+    return details;
+  });
+  [...liveSectionCache.keys()].forEach((key) => {
+    if (!sections.some((section) => section.key === key)) liveSectionCache.delete(key);
+  });
+  if (!nodes.length) {
+    const empty = document.createElement('p');
+    empty.className = 'live-empty';
+    empty.textContent = 'Add a backstory, goals, connections, or your own sections. They will appear here as you type.';
+    nodes.push(empty);
+  }
+  const current = [...container.children];
+  if (current.length === nodes.length && current.every((node, index) => node === nodes[index])) return;
+  container.replaceChildren(...nodes);
+}
+
+function renderProfilePlaces(profile) {
+  const box = document.querySelector('#profile-places');
+  box.replaceChildren();
+  const linked = places.filter((place) => place.characterIds.includes(profile.id));
+  if (!linked.length) {
+    const hint = document.createElement('p');
+    hint.className = 'profile-empty';
+    hint.textContent = 'Not linked to any place yet. Pick this character when you edit a place.';
+    box.append(hint);
+    return;
+  }
+  linked.forEach((place) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'profile-story-link';
+    const name = document.createElement('strong');
+    name.textContent = place.name;
+    const detail = document.createElement('span');
+    detail.textContent = PLACE_KINDS[place.kind] || 'Place';
+    button.append(name, detail);
+    button.addEventListener('click', () => {
+      requestProfileClose(() => openPlaceEditor(place.id, document.querySelector('#new-place')));
+    });
+    box.append(button);
+  });
+}
+
+/* ---------- Places ---------- */
+function placeCharacterNames(place) {
+  return (place.characterIds || [])
+    .map((id) => characters.find((character) => character.id === id)?.name).filter(Boolean);
+}
+
+function renderPlaces() {
+  const library = document.querySelector('#place-library');
+  library.replaceChildren();
+  const query = document.querySelector('#place-search').value.trim().toLowerCase();
+  const kindFilter = document.querySelector('#place-filter-kind').value;
+  const sortMode = document.querySelector('#place-sort').value;
+  const items = places.filter((place) => {
+    if (kindFilter && place.kind !== kindFilter) return false;
+    if (!query) return true;
+    return [place.name, place.summary, place.description, place.lore, place.partOf, PLACE_KINDS[place.kind],
+      ...place.tags, ...placeCharacterNames(place)].join(' ').toLowerCase().includes(query);
+  });
+  items.sort((a, b) => {
+    if (sortMode === 'name') return a.name.localeCompare(b.name);
+    const order = (a.updatedAt || '').localeCompare(b.updatedAt || '');
+    return sortMode === 'oldest' ? order : -order;
+  });
+  items.forEach((place) => {
+    const item = document.createElement('div');
+    item.className = 'story-card-item';
+    const card = document.createElement('button');
+    card.className = 'story-card';
+    card.type = 'button';
+    card.setAttribute('aria-label', `Open place: ${place.name}`);
+    const header = document.createElement('span');
+    header.className = 'story-card-header';
+    const label = document.createElement('span');
+    label.className = 'story-card-label';
+    label.textContent = (PLACE_KINDS[place.kind] || 'Place').toUpperCase();
+    const date = document.createElement('span');
+    date.className = 'story-card-date';
+    date.style.marginRight = '30px';
+    date.textContent = place.updatedAt
+      ? new Date(place.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+    header.append(label, date);
+    const title = document.createElement('strong');
+    title.textContent = place.name;
+    const excerpt = document.createElement('span');
+    excerpt.className = 'story-card-excerpt';
+    excerpt.textContent = place.summary || place.description || place.lore || 'No description yet. Open this place to add one.';
+    if (place.image && validImageSource(place.image)) {
+      const cover = document.createElement('img');
+      cover.className = 'story-card-cover';
+      cover.alt = '';
+      setImageSource(cover, place.image, () => cover.classList.add('hidden'));
+      card.append(cover);
+    }
+    card.append(header, title, excerpt);
+    if (place.partOf) {
+      const part = document.createElement('span');
+      part.className = 'place-card-part';
+      part.textContent = `◈ Part of ${place.partOf}`;
+      card.append(part);
+    }
+    if (place.tags.length) {
+      const chips = document.createElement('span');
+      chips.className = 'story-card-chips';
+      place.tags.slice(0, 3).forEach((tag) => {
+        const chip = document.createElement('span');
+        chip.className = 'story-chip';
+        chip.textContent = `#${tag}`;
+        chips.append(chip);
+      });
+      card.append(chips);
+    }
+    const names = placeCharacterNames(place);
+    if (names.length) {
+      const cast = document.createElement('span');
+      cast.className = 'story-card-cast';
+      cast.textContent = `✦ ${names.slice(0, 2).join(', ')}${names.length > 2 ? ` +${names.length - 2}` : ''}`;
+      card.append(cast);
+    }
+    const linkedStories = savedStories.filter((story) => (story.placeIds || []).includes(place.id));
+    if (linkedStories.length) {
+      const storyLinks = document.createElement('span');
+      storyLinks.className = 'story-card-cast';
+      storyLinks.textContent = `✎ ${linkedStories.slice(0, 2).map((story) => story.title || 'Untitled story').join(', ')}${linkedStories.length > 2 ? ` +${linkedStories.length - 2}` : ''}`;
+      card.append(storyLinks);
+    }
+    const action = document.createElement('span');
+    action.className = 'story-card-action';
+    action.textContent = 'Open place →';
+    card.append(action);
+    card.addEventListener('click', () => openPlaceEditor(place.id, card));
+    const remove = document.createElement('button');
+    remove.className = 'card-delete-button story-delete-button';
+    remove.type = 'button';
+    remove.textContent = '×';
+    remove.setAttribute('aria-label', `Delete place: ${place.name}`);
+    remove.title = 'Delete place';
+    remove.addEventListener('click', (event) => {
+      event.stopPropagation();
+      requestDeleteItem(place.id, 'place', place, remove);
+    });
+    item.append(card, remove);
+    library.append(item);
+  });
+  library.classList.toggle('is-horizontal', items.length >= 4);
+  library.classList.toggle('hidden', items.length === 0);
+  document.querySelector('#place-sidebar-count').textContent = String(places.length);
+  document.querySelector('#place-count').textContent = `(${places.length})`;
+  document.querySelector('#place-empty').classList.toggle('hidden', places.length > 0);
+  document.querySelector('#place-filter-bar').classList.toggle('hidden', places.length === 0);
+  document.querySelector('#place-no-results').classList.toggle('hidden', !(places.length > 0 && items.length === 0));
+}
+
+function renderPlaceCharacterPicker(selectedIds = []) {
+  const picker = document.querySelector('#place-characters');
+  picker.replaceChildren();
+  if (!characters.length) {
+    const hint = document.createElement('p');
+    hint.className = 'story-picker-empty';
+    hint.textContent = 'No characters yet. Create one in the Character Studio and they will appear here.';
+    picker.append(hint);
+    return;
+  }
+  characters.forEach((character) => {
+    const chip = document.createElement('label');
+    chip.className = 'story-character-chip';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = character.id;
+    input.checked = selectedIds.includes(character.id);
+    const name = document.createElement('span');
+    name.textContent = character.name;
+    chip.append(input, name);
+    picker.append(chip);
+  });
+}
+
+function renderStoryPlacePicker(selectedIds = []) {
+  const picker = document.querySelector('#story-places');
+  picker.replaceChildren();
+  if (!places.length) {
+    const hint = document.createElement('p');
+    hint.className = 'story-picker-empty';
+    hint.textContent = 'No places yet. Create one in Places & Settings to link it here.';
+    picker.append(hint);
+    return;
+  }
+  places.forEach((place) => {
+    const chip = document.createElement('label');
+    chip.className = 'story-character-chip';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = place.id;
+    input.checked = selectedIds.includes(place.id);
+    const name = document.createElement('span');
+    name.textContent = place.name;
+    chip.append(input, name);
+    picker.append(chip);
+  });
+}
+
+function syncPlaceImageChip() {
+  const field = document.querySelector('#place-image-url');
+  syncImageChip(document.querySelector('#place-image-chip'), field.closest('.story-image-control'), field.value.trim(), true);
+}
+
+function readPlaceForm() {
+  const value = (id) => document.querySelector(id).value;
+  return {
+    name: value('#place-name'), kind: value('#place-kind'), partOf: value('#place-part-of'),
+    summary: value('#place-summary'), description: value('#place-description'),
+    lore: value('#place-lore'),
+    atmosphere: value('#place-atmosphere'), notes: value('#place-notes'), tags: value('#place-tags'),
+    image: value('#place-image-url').trim(),
+    characterIds: [...document.querySelectorAll('#place-characters input:checked')].map((input) => input.value),
+  };
+}
+
+function openPlaceEditor(id = '', returnFocus = document.activeElement) {
+  const place = places.find((item) => item.id === id);
+  const recoveredDraft = (id && placeDrafts[id]) || (!id ? Object.values(placeDrafts)[0] : null);
+  const current = recoveredDraft || place;
+  activePlaceId = place?.id || current?.id || createId();
+  placeReturnFocus = returnFocus;
+  const set = (selector, value) => { document.querySelector(selector).value = value; };
+  set('#place-name', current?.name || '');
+  set('#place-kind', current?.kind || 'city');
+  set('#place-part-of', current?.partOf || '');
+  set('#place-summary', current?.summary || '');
+  set('#place-description', current?.description || '');
+  set('#place-lore', current?.lore || '');
+  set('#place-atmosphere', current?.atmosphere || '');
+  set('#place-notes', current?.notes || '');
+  set('#place-tags', (current?.tags || []).join(', '));
+  set('#place-image-url', current?.image || '');
+  renderPlaceCharacterPicker(current?.characterIds || []);
+  syncPlaceImageChip();
+  document.querySelector('#place-description-count').textContent = String((current?.description || '').length);
+  document.querySelector('#place-lore-count').textContent = `${String(current?.lore || '').trim() ? countWords(current.lore) : 0} words`;
+  document.querySelector('#place-delete').classList.toggle('hidden', !place);
+  document.querySelector('#place-title').textContent = current?.name || (recoveredDraft ? 'Continue your place.' : 'A new place.');
+  if (!current?.name) {
+    document.querySelector('#place-title').replaceChildren('A new ', Object.assign(document.createElement('em'), { textContent: 'place.' }));
+  }
+  placeHasChanges = Boolean(recoveredDraft || (current && !place));
+  const dialog = document.querySelector('#place-dialog');
+  dialog.classList.remove('is-closing');
+  if (!dialog.open) dialog.showModal();
+  syncModalScrollLock();
+  dialog.querySelector('.profile-scroll').scrollTop = 0;
+  document.querySelector('#place-name').focus();
+}
+
+function closePlaceNow() {
+  const dialog = document.querySelector('#place-dialog');
+  if (!dialog.open || dialog.classList.contains('is-closing')) return;
+  dialog.classList.add('is-closing');
+  const delay = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 400;
+  placeCloseTimer = window.setTimeout(() => {
+    dialog.close();
+    placeCloseTimer = null;
+  }, delay);
+}
+
+function requestPlaceClose() {
+  const dialog = document.querySelector('#place-dialog');
+  if (!dialog.open) return;
+  if (!placeHasChanges) {
+    closePlaceNow();
+    return;
+  }
+  pendingDeleteId = 'place-editor';
+  pendingDeleteKind = 'discard-place';
+  pendingDeleteFocus = null;
+  document.querySelector('#delete-dialog-title').textContent = 'Close without saving?';
+  document.querySelector('#delete-dialog-message').textContent = 'Your changes are autosaved as a draft on this device. Discarding will remove that draft and keep the last saved place.';
+  document.querySelector('#cancel-delete').textContent = 'Keep editing';
+  document.querySelector('#confirm-delete').textContent = 'Discard changes';
+  deleteDialog.showModal();
+  syncModalScrollLock();
+  document.querySelector('#cancel-delete').focus();
+}
+
+function savePlaceFromForm() {
+  const form = readPlaceForm();
+  if (!form.name.trim()) {
+    showToast('Give this place a name first.');
+    document.querySelector('#place-name').focus();
+    return false;
+  }
+  const record = normalizePlace({ ...form, id: activePlaceId || createId(), updatedAt: new Date().toISOString() });
+  const next = places.some((place) => place.id === record.id)
+    ? places.map((place) => (place.id === record.id ? record : place)) : [record, ...places];
+  if (!writeStorage(PLACES_STORAGE_KEY, next)) {
+    showToast('Could not save this place. Your browser storage may be full. Try a smaller image.');
+    return false;
+  }
+  places.splice(0, places.length, ...next);
+  window.clearTimeout(placeDraftTimer);
+  placeDraftPending = false;
+  const removedDraft = placeDrafts[record.id];
+  let draftCleared = true;
+  if (removedDraft) {
+    delete placeDrafts[record.id];
+    draftCleared = writeStorage(PLACE_DRAFT_KEY, placeDrafts);
+  }
+  if (!draftCleared) {
+    placeDrafts[record.id] = removedDraft;
+  }
+  activePlaceId = record.id;
+  placeHasChanges = false;
+  persistCharacterLibrary();
+  renderPlaces();
+  renderStories();
+  showToast(draftCleared ? 'Place saved.' : 'Place saved, but its autosaved draft could not be cleared.');
+  return true;
+}
+
+function handlePlaceImageUpload(event) {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    showToast('Choose an image file.');
+    input.value = '';
+    return;
+  }
+  if (file.size > MAX_IMAGE_UPLOAD_BYTES) {
+    showToast('Choose an image smaller than 5 MB.');
+    input.value = '';
+    return;
+  }
+  resizeStoryImage(file).then((dataUrl) => {
+    document.querySelector('#place-image-url').value = dataUrl;
+    syncPlaceImageChip();
+    placeHasChanges = true;
+    savePlaceDraft();
+  }).catch(() => showToast('Could not read that image. Try another file or paste an image link.'))
+    .finally(() => { input.value = ''; });
+}
+
+function currentPlaceDraft() {
+  return normalizePlace({
+    ...readPlaceForm(),
+    name: document.querySelector('#place-name').value.trim() || 'Untitled place',
+    id: activePlaceId || createId(),
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+function savePlaceDraft() {
+  placeDraftPending = true;
+  window.clearTimeout(placeDraftTimer);
+  placeDraftTimer = window.setTimeout(flushPlaceDraft, 500);
+}
+
+function flushPlaceDraft() {
+  if (!placeDraftPending || !document.querySelector('#place-dialog').open) return;
+  placeDraftPending = false;
+  placeDraftTimer = 0;
+  const draft = currentPlaceDraft();
+  if (!draft) return;
+  if (!document.querySelector('#place-name').value.trim()
+    && !draft.description && !draft.lore && !draft.notes && !draft.summary && !draft.image) return;
+  draft.name = document.querySelector('#place-name').value.trim();
+  const previous = placeDrafts[draft.id];
+  placeDrafts[draft.id] = draft;
+  if (!writeStorage(PLACE_DRAFT_KEY, placeDrafts)) {
+    if (previous) placeDrafts[draft.id] = previous;
+    else delete placeDrafts[draft.id];
+    showToast('Could not autosave this place. Save it before closing.');
+    return;
+  }
+  scheduleFolderBackup();
+  if (!writeStorage(PLACE_DRAFT_KEY, placeDrafts)) {
+    showToast('Could not autosave this place. Save it before closing.');
+  }
+}
+
+function placesToReadable(items, markdown) {
+  return items.map((place) => {
+    const names = placeCharacterNames(place);
+    const meta = [PLACE_KINDS[place.kind], place.partOf && `Part of ${place.partOf}`,
+      names.length && `Characters: ${names.join(', ')}`, place.tags.length && `Tags: ${place.tags.join(', ')}`]
+      .filter(Boolean).join(' · ');
+    return [
+      markdown ? `# ${place.name}` : `${place.name}\n${'='.repeat(Math.min(place.name.length, 60))}`,
+      meta,
+      place.summary && (markdown ? `> ${place.summary}` : place.summary),
+      place.description,
+      place.lore && `${markdown ? '**Lore & story:**' : 'Lore & story:'}\n\n${place.lore}`,
+      place.atmosphere && `${markdown ? '**Atmosphere:** ' : 'Atmosphere: '}${place.atmosphere}`,
+      place.notes && `${markdown ? '**Notes:** ' : 'Notes: '}${place.notes}`,
+    ].filter(Boolean).join('\n\n');
+  }).join(markdown ? '\n\n---\n\n' : '\n\n\n');
+}
+
+function exportPlaces() {
+  if (!places.length) {
+    showToast('There are no places to export yet.');
+    return;
+  }
+  const format = document.querySelector('#place-export-format').value;
+  const readable = format === 'md' || format === 'txt';
+  const extension = readable ? format : format === 'yaml' ? 'yaml' : 'json';
+  const data = { places: places.map((place) => ({ ...place })) };
+  const content = readable ? placesToReadable(places, format === 'md')
+    : format === 'yaml' ? toYaml(data) : JSON.stringify(data, null, 2);
+  const mimeType = format === 'md' ? 'text/markdown;charset=utf-8' : format === 'txt' ? 'text/plain;charset=utf-8'
+    : format === 'yaml' ? 'text/yaml;charset=utf-8' : 'application/json;charset=utf-8';
+  downloadFile(`fable-places.${extension}`, content, mimeType);
+  showToast(readable
+    ? `Places exported as ${extension.toUpperCase()} for reading. Use JSON or YAML for backups you can import.`
+    : `Places exported as ${extension.toUpperCase()}.`);
+}
+
+async function importPlaces(event) {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  if (!file) return;
+  try {
+    if (file.size > MAX_IMPORT_FILE_BYTES) throw new Error('Choose an import file that is 5 MB or smaller.');
+    const extension = file.name.split('.').pop().toLowerCase();
+    if (!['json', 'yaml', 'yml'].includes(extension)) throw new Error('Choose a JSON or YAML places backup.');
+    const contents = await file.text();
+    const parsed = extension === 'json' ? JSON.parse(contents.replace(/^\uFEFF/, '')) : parseYaml(contents);
+    const records = Array.isArray(parsed) ? parsed
+      : Array.isArray(parsed?.places) ? parsed.places : parsed && typeof parsed === 'object' && parsed.name ? [parsed] : [];
+    const imported = records.map(normalizePlace).filter(Boolean);
+    if (!imported.length) throw new Error('No places were found in that file.');
+    const next = [...places];
+    imported.forEach((place) => {
+      const index = next.findIndex((item) => item.id === place.id);
+      if (index >= 0) next[index] = place;
+      else next.unshift(place);
+    });
+    if (!writeStorage(PLACES_STORAGE_KEY, next)) throw new Error('Could not import. Your browser storage may be full.');
+    places.splice(0, places.length, ...next);
+    renderPlaces();
+    showToast(`Imported ${imported.length} place${imported.length === 1 ? '' : 's'}.`);
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : 'Import failed. Check that the file is valid JSON or YAML.');
+  } finally {
+    input.value = '';
+  }
+}
+
+function removeCharacterFromLinks(characterId) {
+  const strip = (item) => ((item.characterIds || []).includes(characterId)
+    ? { ...item, characterIds: item.characterIds.filter((id) => id !== characterId) } : item);
+  const nextStories = savedStories.map(strip);
+  if (nextStories.some((story, index) => story !== savedStories[index]) && writeStorage(STORIES_STORAGE_KEY, nextStories)) {
+    savedStories.splice(0, savedStories.length, ...nextStories);
+  }
+  let draftsChanged = false;
+  Object.keys(storyDrafts).forEach((id) => {
+    if ((storyDrafts[id].characterIds || []).includes(characterId)) {
+      storyDrafts[id] = strip(storyDrafts[id]);
+      draftsChanged = true;
+    }
+  });
+  if (draftsChanged) writeStorage(STORY_DRAFTS_KEY, storyDrafts);
+  const nextPlaces = places.map(strip);
+  if (nextPlaces.some((place, index) => place !== places[index]) && writeStorage(PLACES_STORAGE_KEY, nextPlaces)) {
+    places.splice(0, places.length, ...nextPlaces);
+  }
+  renderStories();
+  renderPlaces();
+}
+
 function renderRelationEditors() {
   renderBondsEditor();
   renderTimelineEditor();
+  renderCustomEditor();
   renderCharacterHistory();
 }
 
@@ -877,6 +1722,7 @@ function currentProfile() {
     appearance: document.querySelector('#appearance').value.trim(),
     bonds: document.querySelector('#bonds').value.trim(),
     timeline: document.querySelector('#timeline').value.trim(),
+    customSections: document.querySelector('#customSections').value.trim(),
   };
 }
 
@@ -973,6 +1819,7 @@ function currentStoryDraft() {
       setting: document.querySelector('#story-setting').value,
       tags: document.querySelector('#story-tags').value,
       characterIds: [...document.querySelectorAll('#story-characters input:checked')].map((input) => input.value),
+      placeIds: [...document.querySelectorAll('#story-places input:checked')].map((input) => input.value),
     }),
     updatedAt: new Date().toISOString(),
   };
@@ -1023,12 +1870,9 @@ function updateStoryPreview(story) {
   if (imageSource && validImageSource(imageSource)) {
     readingCover.alt = story?.title ? `${story.title} cover` : 'Story cover';
     readingCoverWrap.classList.remove('hidden');
-    if (readingCover.dataset.imageSource !== imageSource) {
-      setImageSource(readingCover, imageSource, () => readingCoverWrap.classList.add('hidden'));
-    }
+    setImageSource(readingCover, imageSource, () => readingCoverWrap.classList.add('hidden'));
   } else {
-    readingCover.removeAttribute('src');
-    readingCover.dataset.imageSource = '';
+    setImageSource(readingCover, '');
     readingCoverWrap.classList.add('hidden');
   }
 }
@@ -1323,6 +2167,7 @@ function discardStoryChanges() {
     discardArmTimer = window.setTimeout(disarmStoryDiscard, 3500);
     return;
   }
+  cancelStoryDraftSave();
   const nextDrafts = { ...storyDrafts };
   delete nextDrafts[id];
   if (!writeStorage(STORY_DRAFTS_KEY, nextDrafts)) {
@@ -1339,11 +2184,18 @@ function discardStoryChanges() {
   }
 }
 
-function handleStoryEditorInput() {
-  const draft = currentStoryDraft();
-  updateStoryCounter(draft.text);
+var storyViewTimer = 0;
+
+function renderStoryEditorViews() {
+  storyViewTimer = 0;
   renderStoryChapters();
-  updateStoryPreview(draft);
+  updateStoryPreview(currentStoryDraft());
+}
+
+function handleStoryEditorInput() {
+  updateStoryCounter(document.querySelector('#story-text').value);
+  window.clearTimeout(storyViewTimer);
+  storyViewTimer = window.setTimeout(renderStoryEditorViews, 160);
   saveStoryDraft();
 }
 
@@ -1364,22 +2216,40 @@ function handleStoryImageUpload(event) {
     .finally(() => { input.value = ''; });
 }
 
-function resizeStoryImage(file, maxSide = 1600, quality = 0.82) {
+function imageHasTransparency(image) {
+  const probe = document.createElement('canvas');
+  probe.width = 48;
+  probe.height = 48;
+  const context = probe.getContext('2d', { willReadFrequently: true });
+  context.drawImage(image, 0, 0, 48, 48);
+  const pixels = context.getImageData(0, 0, 48, 48).data;
+  for (let index = 3; index < pixels.length; index += 4) {
+    if (pixels[index] < 250) return true;
+  }
+  return false;
+}
+
+function resizeStoryImage(file, maxSide = 1400, quality = 0.8) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const image = new Image();
     image.addEventListener('load', () => {
       URL.revokeObjectURL(url);
       if (!image.naturalWidth || !image.naturalHeight) { reject(new Error('Unreadable image')); return; }
-      const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+      let keepAlpha = false;
+      try { keepAlpha = /^image\/(png|webp|gif)$/.test(file.type) && imageHasTransparency(image); } catch { keepAlpha = false; }
+      const limit = keepAlpha ? Math.min(maxSide, 1000) : maxSide;
+      const scale = Math.min(1, limit / Math.max(image.naturalWidth, image.naturalHeight));
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
       canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
       const context = canvas.getContext('2d');
-      context.fillStyle = '#ffffff';
-      context.fillRect(0, 0, canvas.width, canvas.height);
+      if (!keepAlpha) {
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+      }
       context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', quality));
+      resolve(keepAlpha ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', quality));
     });
     image.addEventListener('error', () => { URL.revokeObjectURL(url); reject(new Error('Unreadable image')); });
     image.src = url;
@@ -1407,7 +2277,7 @@ function renderStories() {
     if (!query) return true;
     return [
       story.title, story.text, story.summary, story.setting, STORY_KINDS[story.kind],
-      ...(story.tags || []), ...storyCharacterNames(story),
+      ...(story.tags || []), ...storyCharacterNames(story), ...storyPlaceNames(story),
     ].join(' ').toLowerCase().includes(query);
   });
   items.sort((a, b) => {
@@ -1477,6 +2347,13 @@ function renderStories() {
     }
     card.append(header, title, excerpt, chips);
     if (castNames.length) card.append(cast);
+    const placeNames = storyPlaceNames(story);
+    if (placeNames.length) {
+      const settings = document.createElement('span');
+      settings.className = 'story-card-cast';
+      settings.textContent = `◈ ${placeNames.slice(0, 2).join(', ')}${placeNames.length > 2 ? ` +${placeNames.length - 2}` : ''}`;
+      card.append(settings);
+    }
     card.append(action);
     card.addEventListener('click', () => {
       previewStoryId = story.id;
@@ -1521,6 +2398,7 @@ function renderStories() {
 }
 
 function openStoryEditor(storyId = '', returnFocus = document.activeElement) {
+  flushStoryDraft();
   activeStoryId = storyId || createId();
   storyReturnFocus = returnFocus;
   const saved = savedStories.find((story) => story.id === activeStoryId);
@@ -1544,6 +2422,7 @@ function openStoryEditor(storyId = '', returnFocus = document.activeElement) {
   document.querySelector('#story-setting').value = meta.setting;
   document.querySelector('#story-tags').value = meta.tags.join(', ');
   renderStoryCharacterPicker(meta.characterIds);
+  renderStoryPlacePicker(meta.placeIds);
   updateStoryCounter(story.text);
   document.querySelector('#story-chapters-panel').open = false;
   renderStoryChapters();
@@ -1587,6 +2466,7 @@ function saveCurrentStory() {
   }
   const previousSaved = savedStories.find((item) => item.id === story.id);
   savedStories.splice(0, savedStories.length, ...nextStories);
+  cancelStoryDraftSave();
   delete storyDrafts[story.id];
   if (previousSaved && !(storyVersions[story.id] || []).length) recordStoryVersion(previousSaved);
   recordStoryVersion(story);
@@ -1596,12 +2476,37 @@ function saveCurrentStory() {
   }
   document.querySelector('#story-save-status').textContent = 'Story saved on this device';
   document.querySelector('#story-editor-title').textContent = story.title;
+  persistCharacterLibrary();
   renderStories();
+  renderPlaces();
   showToast('Story saved.');
   return true;
 }
 
+var storyDraftTimer = 0;
+var storyDraftPending = false;
+
 function saveStoryDraft() {
+  storyDraftPending = true;
+  document.querySelector('#story-save-status').textContent = 'Saving…';
+  window.clearTimeout(storyDraftTimer);
+  storyDraftTimer = window.setTimeout(flushStoryDraft, 450);
+}
+
+function cancelStoryDraftSave() {
+  window.clearTimeout(storyDraftTimer);
+  storyDraftPending = false;
+}
+
+function flushPendingDrafts() {
+  flushDraftSave();
+  flushStoryDraft();
+  flushPlaceDraft();
+}
+
+function flushStoryDraft() {
+  if (!storyDraftPending) return;
+  cancelStoryDraftSave();
   const draft = currentStoryDraft();
   const saved = savedStories.find((story) => story.id === draft.id);
   const unchanged = saved && saved.title === draft.title && saved.text === draft.text
@@ -1610,7 +2515,7 @@ function saveStoryDraft() {
     && storyMetaEqual(saved, draft);
   if (unchanged) {
     delete storyDrafts[draft.id];
-    writeStorage(STORY_DRAFTS_KEY, storyDrafts);
+    if (writeStorage(STORY_DRAFTS_KEY, storyDrafts)) scheduleFolderBackup();
     document.querySelector('#story-save-status').textContent = 'Story saved on this device';
     return;
   }
@@ -1620,26 +2525,119 @@ function saveStoryDraft() {
     showToast('Could not autosave this draft. Save the story before closing.');
     return;
   }
+  scheduleFolderBackup();
   document.querySelector('#story-save-status').textContent = 'Draft saved on this device';
   document.querySelector('#story-editor-title').textContent = draft.title || 'Write a story';
 }
 
+var storageMeterTimer = 0;
+var storageWarned = false;
+const STORAGE_BUDGET_BYTES = 5 * 1024 * 1024;
+const UI_PREFS_KEY = 'fable.ui.v1';
+const UI_PREF_FIELDS = {
+  '#cast-sort': 'castSort', '#export-format': 'castExport',
+  '#story-sort': 'storySort', '#story-filter-kind': 'storyKind', '#story-filter-progress': 'storyProgress', '#story-export-format': 'storyExport',
+  '#place-sort': 'placeSort', '#place-filter-kind': 'placeKind', '#place-export-format': 'placeExport',
+};
+
+function estimateStorageBytes() {
+  let characters = 0;
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key && key.startsWith('fable.')) characters += key.length + (localStorage.getItem(key) || '').length;
+    }
+  } catch { return 0; }
+  return characters * 2;
+}
+
+function updateStorageMeter() {
+  storageMeterTimer = 0;
+  const meter = document.querySelector('#storage-meter');
+  if (!meter) return;
+  const bytes = estimateStorageBytes();
+  const megabytes = bytes / (1024 * 1024);
+  meter.textContent = `${megabytes < 0.1 ? '<0.1' : megabytes.toFixed(1)} MB used`;
+  meter.title = `Your browser allows roughly ${STORAGE_BUDGET_BYTES / (1024 * 1024)} MB for saved work. Large images use the most space.`;
+  meter.classList.toggle('is-high', bytes > STORAGE_BUDGET_BYTES * 0.8);
+  if (bytes > STORAGE_BUDGET_BYTES * 0.85 && !storageWarned) {
+    storageWarned = true;
+    showToast('Browser storage is almost full. Export a backup and remove large images to keep saving.');
+  }
+}
+
+function updateStorageMeterSoon() {
+  if (storageMeterTimer) return;
+  storageMeterTimer = window.setTimeout(updateStorageMeter, 700);
+}
+
+function initUiPrefs() {
+  const prefs = readStorage(UI_PREFS_KEY, {}) || {};
+  Object.entries(UI_PREF_FIELDS).forEach(([selector, key]) => {
+    const field = document.querySelector(selector);
+    if (!field) return;
+    if (typeof prefs[key] === 'string' && [...field.options].some((option) => option.value === prefs[key])) {
+      field.value = prefs[key];
+    }
+    field.addEventListener('change', () => {
+      const current = readStorage(UI_PREFS_KEY, {}) || {};
+      current[key] = field.value;
+      writeStorage(UI_PREFS_KEY, current);
+    });
+  });
+}
+
+document.addEventListener('keydown', (event) => {
+  if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return;
+  if (deleteDialog.open || document.querySelector('#image-crop-dialog').open) return;
+  if (document.querySelector('#place-dialog').open) {
+    event.preventDefault();
+    document.querySelector('#place-form').requestSubmit();
+  } else if (document.querySelector('#story-dialog').open) {
+    event.preventDefault();
+    saveCurrentStory();
+  } else if (document.activeElement?.closest?.('#character-form')) {
+    event.preventDefault();
+    form.requestSubmit();
+  }
+});
+
 function writeStorage(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    updateStorageMeterSoon();
     return true;
   } catch {
     return false;
   }
 }
 
+var draftSaveTimer = 0;
+var draftSavePending = false;
+
 function saveDraft() {
+  draftSavePending = true;
+  document.querySelector('#autosave-status').textContent = 'Saving…';
+  window.clearTimeout(draftSaveTimer);
+  draftSaveTimer = window.setTimeout(flushDraftSave, 450);
+  return true;
+}
+
+function cancelDraftSave() {
+  window.clearTimeout(draftSaveTimer);
+  draftSavePending = false;
+}
+
+function flushDraftSave() {
+  if (!draftSavePending) return true;
+  cancelDraftSave();
   const saved = writeStorage(DRAFT_KEY, currentProfile());
   document.querySelector('#autosave-status').textContent = saved ? 'Draft saved' : 'Draft not saved';
   if (!saved && !draftSaveWarningShown) {
     showToast('Draft could not be saved. Export a backup or use Import JSON/CSV to restore it later.');
   }
   draftSaveWarningShown = !saved;
+  if (saved) scheduleFolderBackup();
   return saved;
 }
 
@@ -1679,6 +2677,15 @@ function setFolderStatus(message) {
   document.querySelector('#data-folder-status').textContent = message;
 }
 
+function scheduleFolderBackup() {
+  if (!dataDirectory) return;
+  window.clearTimeout(folderBackupTimer);
+  folderBackupTimer = window.setTimeout(() => {
+    folderBackupTimer = 0;
+    persistCharacterLibrary();
+  }, 1500);
+}
+
 function persistCharacterLibrary() {
   if (!dataDirectory) return;
   folderWritePending = folderWritePending.then(async () => {
@@ -1688,19 +2695,24 @@ function persistCharacterLibrary() {
         setFolderStatus('Folder permission needed — choose it again');
         return;
       }
-      const file = await dataDirectory.getFileHandle('fable-character-library.json', { create: true });
+      const file = await dataDirectory.getFileHandle('fable-studio-backup.json', { create: true });
       const writable = await file.createWritable();
       await writable.write(JSON.stringify({
-        format: 'fable-character-library',
+        format: 'fable-studio-backup',
         version: 1,
         updatedAt: new Date().toISOString(),
         characters,
+        characterDraft: [readStorage(DRAFT_KEY, null)].filter(Boolean),
+        stories: savedStories,
+        drafts: Object.values(storyDrafts),
+        places,
+        placeDrafts: Object.values(placeDrafts),
       }, null, 2));
       await writable.close();
       setFolderStatus(`Backup updated in ${dataDirectory.name}`);
     } catch {
-      setFolderStatus('Folder backup failed — export a backup instead');
-      showToast('Could not update the folder backup. Your browser copy is still saved; export a backup to keep another copy.');
+      setFolderStatus('Folder backup failed — export a full backup instead');
+      showToast('Could not update the folder backup. Your browser copy is still saved; export a full backup to keep another copy.');
     }
   });
   return folderWritePending;
@@ -1710,8 +2722,8 @@ async function initializeDataFolder() {
   const button = document.querySelector('#connect-data-folder');
   if (!window.showDirectoryPicker || !window.indexedDB) {
     button.disabled = true;
-    button.title = 'Folder access is unavailable in this browser. Use Export all to save a backup.';
-    setFolderStatus('Folder access unavailable — use Export all');
+    button.title = 'Folder access is unavailable in this browser. Use Export all data to save a backup.';
+    setFolderStatus('Folder access unavailable — use Export all data');
     return;
   }
   try {
@@ -1745,8 +2757,121 @@ document.querySelector('#connect-data-folder').addEventListener('click', async (
     showToast(`Character backups will be saved in ${handle.name}.`);
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return;
-    setFolderStatus('Could not connect folder — use Export all');
+    setFolderStatus('Could not connect folder — use Export all data');
     showToast('Could not connect that folder. Browser autosave and manual exports are still available.');
+  }
+});
+
+const resetButton = document.querySelector('#reset-content');
+const resetDialog = document.querySelector('#reset-dialog');
+modalDialogs.push(resetDialog);
+resetDialog.addEventListener('close', syncModalScrollLock);
+let resetHoldTimer = 0;
+let resetHoldKey = '';
+let resetHoldTriggered = false;
+const RESET_HOLD_DURATION_MS = 1400;
+
+function cancelResetHold() {
+  window.clearTimeout(resetHoldTimer);
+  resetHoldTimer = 0;
+  resetHoldKey = '';
+  resetButton.classList.remove('is-holding');
+}
+
+function startResetHold(trigger) {
+  if (resetHoldTimer || resetDialog.open) return;
+  resetHoldKey = trigger;
+  resetButton.classList.add('is-holding');
+  resetHoldTimer = window.setTimeout(() => {
+    resetHoldTimer = 0;
+    resetHoldKey = '';
+    resetButton.classList.remove('is-holding');
+    resetHoldTriggered = true;
+    resetDialog.showModal();
+    syncModalScrollLock();
+    document.querySelector('#cancel-reset').focus();
+  }, RESET_HOLD_DURATION_MS);
+}
+
+resetButton.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  startResetHold('pointer');
+});
+resetButton.addEventListener('pointerup', (event) => {
+  if (resetHoldKey === 'pointer') cancelResetHold();
+});
+resetButton.addEventListener('pointercancel', cancelResetHold);
+resetButton.addEventListener('pointerleave', () => {
+  if (resetHoldKey === 'pointer') cancelResetHold();
+});
+resetButton.addEventListener('keydown', (event) => {
+  if (!['Enter', ' '].includes(event.key)) return;
+  event.preventDefault();
+  if (!event.repeat) startResetHold(event.key);
+});
+resetButton.addEventListener('keyup', (event) => {
+  if (resetHoldKey === event.key) cancelResetHold();
+});
+resetButton.addEventListener('blur', () => {
+  if (resetHoldKey) cancelResetHold();
+});
+resetButton.addEventListener('contextmenu', (event) => event.preventDefault());
+resetButton.addEventListener('click', (event) => {
+  event.preventDefault();
+  if (resetHoldTriggered) {
+    resetHoldTriggered = false;
+    return;
+  }
+  showToast('Press and hold the reset button to open the confirmation.');
+});
+document.querySelector('#cancel-reset').addEventListener('click', () => resetDialog.close());
+resetDialog.addEventListener('click', (event) => {
+  if (event.target === resetDialog) resetDialog.close();
+});
+document.querySelector('#confirm-reset').addEventListener('click', async () => {
+  const confirmButton = document.querySelector('#confirm-reset');
+  confirmButton.disabled = true;
+  try {
+    cancelDraftSave();
+    cancelStoryDraftSave();
+    window.clearTimeout(placeDraftTimer);
+    placeDraftPending = false;
+    window.clearTimeout(folderBackupTimer);
+    folderBackupTimer = 0;
+    await folderWritePending;
+
+    const handle = dataDirectory || (window.indexedDB ? await folderDatabaseRequest(
+      'readonly',
+      (store) => store.get(FOLDER_HANDLE_KEY),
+    ) : null);
+    if (handle) {
+      let permission = await handle.queryPermission({ mode: 'readwrite' });
+      if (permission !== 'granted') permission = await handle.requestPermission({ mode: 'readwrite' });
+      if (permission !== 'granted') {
+        throw new Error('Reset was cancelled because permission to remove the saved folder backup was not granted.');
+      }
+      for (const filename of ['fable-studio-backup.json', 'fable-character-library.json']) {
+        try {
+          await handle.removeEntry(filename);
+        } catch (error) {
+          if (!(error instanceof DOMException) || error.name !== 'NotFoundError') throw error;
+        }
+      }
+    }
+
+    if (window.indexedDB) {
+      await folderDatabaseRequest('readwrite', (store) => store.delete(FOLDER_HANDLE_KEY));
+    }
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith('fable.')) localStorage.removeItem(key);
+    }
+    resetDialog.close();
+    window.location.reload();
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : 'Reset failed. Your saved content was not cleared.');
+  } finally {
+    confirmButton.disabled = false;
   }
 });
 
@@ -1759,28 +2884,60 @@ function validImageSource(value) {
   return source.startsWith('data:image/') || validWebUrl(source);
 }
 
+function imageKey(source) {
+  return `${source.length}:${source.slice(0, 64)}:${source.slice(-64)}`;
+}
+
 function setImageSource(image, value, onError = () => {}) {
   const source = (value || '').trim();
-  image.dataset.imageSource = '';
-  image.onerror = null;
-  image.onload = null;
   if (!source || !validImageSource(source)) {
+    image.dataset.imageKey = '';
+    image.dataset.imageFailed = '';
+    image.onerror = null;
+    image.onload = null;
     image.removeAttribute('src');
     image.classList.add('hidden');
     return false;
   }
-  image.dataset.imageSource = source;
-  image.onload = () => {
-    if (image.dataset.imageSource === source) image.classList.remove('hidden');
-  };
-  image.onerror = () => {
-    if (image.dataset.imageSource !== source) return;
+  const key = imageKey(source);
+  const fail = () => {
+    if (image.dataset.imageKey !== key) return;
+    image.dataset.imageFailed = key;
     image.classList.add('hidden');
     onError();
   };
+  if (image.dataset.imageKey === key) {
+    image.onerror = fail;
+    return image.dataset.imageFailed !== key;
+  }
+  image.dataset.imageKey = key;
+  image.dataset.imageFailed = '';
+  image.decoding = 'async';
+  image.onload = () => {
+    if (image.dataset.imageKey === key) image.classList.remove('hidden');
+  };
+  image.onerror = fail;
   image.src = source;
   image.classList.remove('hidden');
   return true;
+}
+
+var previewFrame = 0;
+
+function schedulePreview() {
+  if (previewFrame) return;
+  previewFrame = window.setTimeout(() => {
+    previewFrame = 0;
+    updatePreview();
+  }, 24);
+}
+
+function debounce(callback, delay = 150) {
+  let timer = 0;
+  return (...args) => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => callback(...args), delay);
+  };
 }
 
 function updatePreview() {
@@ -1801,6 +2958,7 @@ function updatePreview() {
   updateProfileMeter(profile);
   syncImageChips();
   syncGalleryThumbs();
+  renderLiveSections(profile);
 
   const traitsContainer = document.querySelector('#preview-traits');
   traitsContainer.replaceChildren();
@@ -1965,7 +3123,14 @@ function renderCharacters() {
     emptyState.querySelector('button').classList.remove('hidden');
   }
   renderRelationEditors();
+  const castSignature = characters.map((character) => `${character.id}:${character.name}`).join('|');
+  if (castSignature !== lastCastSignature) {
+    lastCastSignature = castSignature;
+    renderPlaces();
+  }
 }
+
+var lastCastSignature = null;
 
 function validWebUrl(value) {
   try {
@@ -2094,6 +3259,8 @@ function openCharacterProfile(character, returnFocus = document.activeElement) {
   setProfileText('#profile-relations', profile.relations, 'No relationships added yet.');
   setProfileText('#profile-worlds', profile.worlds, 'No world or setting added yet.');
   renderProfileStories(profile.id);
+  renderProfilePlaces(profile);
+  renderProfileCustom(profile);
   renderProfileDepth(profile);
   renderProfileConnections(profile);
   renderProfileTimeline(profile);
@@ -2174,7 +3341,7 @@ function loadCharacter(id) {
     stats: character.stats,
     groups: traitsValue(character.groups),
     goal: character.goal, fear: character.fear, secret: character.secret, flaw: character.flaw,
-    voice: character.voice, appearance: character.appearance, bonds: character.bonds, timeline: character.timeline,
+    voice: character.voice, appearance: character.appearance, bonds: character.bonds, timeline: character.timeline, customSections: character.customSections,
   }).forEach(([idName, value]) => { document.getElementById(idName).value = value || ''; });
   imageCropState = {
     avatar: normalizeImageCrop(character.avatarCrop),
@@ -2184,12 +3351,13 @@ function loadCharacter(id) {
   document.querySelector('#accent-hex').value = document.querySelector('#accent').value;
   document.querySelector('#save-label').textContent = 'Update character';
   syncCharacterActions(true);
-  localStorage.removeItem(DRAFT_KEY);
+  cancelDraftSave(); localStorage.removeItem(DRAFT_KEY);
   document.querySelector('#autosave-status').textContent = 'Editing saved character';
   characterFormHasChanges = false;
   document.querySelector('#depth-details').open = Boolean(character.goal || character.fear || character.secret
     || character.flaw || character.voice || character.appearance);
   document.querySelector('#profile-extras').open = Boolean(characterBonds(character).length || parseTimeline(character.timeline).length);
+  document.querySelector('#custom-details').open = parseCustomSections(character.customSections).length > 0;
   renderRelationEditors();
   updatePreview();
   document.querySelector('#studio').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -2211,8 +3379,9 @@ function resetForm() {
   document.querySelector('#appearance-details').open = false;
   document.querySelector('#profile-extras').open = false;
   document.querySelector('#depth-details').open = false;
+  document.querySelector('#custom-details').open = false;
   renderRelationEditors();
-  localStorage.removeItem(DRAFT_KEY);
+  cancelDraftSave(); localStorage.removeItem(DRAFT_KEY);
   characterFormHasChanges = false;
   document.querySelector('#autosave-status').textContent = 'Draft autosaves here';
   updatePreview();
@@ -2242,7 +3411,7 @@ function syncToastLayer() {
 
 function updateBackToTopVisibility() {
   const button = document.querySelector('#back-to-top');
-  button.classList.toggle('is-visible', window.scrollY > 360 && !characterDialog.open && !aboutDialog.open && !changelogDialog.open && !document.querySelector('#story-dialog').open);
+  button.classList.toggle('is-visible', window.scrollY > 360 && !characterDialog.open && !aboutDialog.open && !changelogDialog.open && !document.querySelector('#place-dialog').open && !document.querySelector('#story-dialog').open);
 }
 
 document.querySelector('#back-to-top').addEventListener('click', () => {
@@ -2253,7 +3422,7 @@ window.addEventListener('scroll', updateBackToTopVisibility, { passive: true });
 form.addEventListener('input', (event) => {
   if (event.target.id === 'avatar' || event.target.id === 'cover') return;
   characterFormHasChanges = true;
-  updatePreview();
+  schedulePreview();
   saveDraft();
 });
 
@@ -2284,18 +3453,15 @@ function handleImageUpload(event) {
   const kind = event.target.id === 'cover-file' ? 'cover' : 'avatar';
   if (imageCandidateDirtyBefore[kind] === null) imageCandidateDirtyBefore[kind] = characterFormHasChanges;
   characterFormHasChanges = true;
-  const reader = new FileReader();
-  reader.addEventListener('load', () => {
-    openImageCropDialog(kind, String(reader.result), imageField(kind).dataset.confirmedSource || '', {
+  readImageFile(file, kind === 'cover' ? 1600 : 900).then((dataUrl) => {
+    openImageCropDialog(kind, dataUrl, imageField(kind).dataset.confirmedSource || '', {
       zoom: 1, x: 0, y: 0,
     }, event.target);
-  });
-  reader.addEventListener('error', () => {
+  }).catch(() => {
     characterFormHasChanges = imageCandidateDirtyBefore[kind] ?? characterFormHasChanges;
     imageCandidateDirtyBefore[kind] = null;
     showToast('Could not read this image file. Try another image or paste an image URL.');
   });
-  reader.readAsDataURL(file);
 }
 
 let renderedGalleryValue = null;
@@ -2622,13 +3788,17 @@ imageCropDialog.addEventListener('cancel', (event) => {
   cancelImageCrop();
 });
 
-function readImageFile(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener('load', () => resolve(String(reader.result)));
-    reader.addEventListener('error', () => reject(new Error(`Could not read ${file.name}. Try another image.`)));
-    reader.readAsDataURL(file);
-  });
+async function readImageFile(file, maxSide = 1400) {
+  try {
+    return await resizeStoryImage(file, maxSide);
+  } catch {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener('load', () => resolve(String(reader.result)));
+      reader.addEventListener('error', () => reject(new Error(`Could not read ${file.name}. Try another image.`)));
+      reader.readAsDataURL(file);
+    });
+  }
 }
 
 async function handleGalleryImageUpload(event) {
@@ -2726,7 +3896,7 @@ function renderChangelog() {
     const notes = document.createElement('ul');
     entry.notes.forEach((note) => {
       const item = document.createElement('li');
-      const match = note.match(/^(Lore & Story|Characters|Images|Fixed|Added)(:|\b)/);
+      const match = note.match(/^(Lore & Story|Characters|Images|Fixed|Added|Backups|Places|Connections)(:|\b)/);
       if (match && match[2] === ':') {
         const label = document.createElement('strong');
         label.textContent = `${match[1]}:`;
@@ -2838,6 +4008,7 @@ form.addEventListener('submit', (event) => {
   }
   profile.id = activeId || createId();
   profile.updatedAt = new Date().toISOString();
+  profile.customSections = serializeCustomSections(parseCustomSections(profile.customSections));
   profile.bonds = serializeBonds(parseBonds(profile.bonds).filter((bond) => bond.id !== profile.id && characters.some((item) => item.id === bond.id)));
   const existingIndex = characters.findIndex((item) => item.id === profile.id);
   const nextCharacters = [...characters];
@@ -2846,7 +4017,7 @@ form.addEventListener('submit', (event) => {
   let saved = writeStorage(STORAGE_KEY, nextCharacters);
   if (!saved) {
     try {
-      localStorage.removeItem(DRAFT_KEY);
+      cancelDraftSave(); localStorage.removeItem(DRAFT_KEY);
       saved = writeStorage(STORAGE_KEY, nextCharacters);
     } catch {
       saved = false;
@@ -2864,12 +4035,14 @@ form.addEventListener('submit', (event) => {
   persistCharacterLibrary();
   activeId = profile.id;
   document.querySelector('#character-id').value = profile.id;
-  localStorage.removeItem(DRAFT_KEY);
+  cancelDraftSave(); localStorage.removeItem(DRAFT_KEY);
   characterFormHasChanges = false;
   document.querySelector('#autosave-status').textContent = 'Character saved';
   document.querySelector('#save-label').textContent = 'Update character';
   syncCharacterActions(true);
   renderCharacters();
+  renderStories();
+  renderPlaces();
   updatePreview();
   showToast(`${profile.name} is saved to your cast.`);
 });
@@ -2882,7 +4055,7 @@ const exportFields = [
   ['accent', 'Accent'], ['gallery', 'Gallery'], ['relations', 'Relations'],
   ['links', 'Links'], ['worlds', 'Worlds'], ['stats', 'Stats'],
   ['groups', 'Groups'], ['goal', 'Goal'], ['fear', 'Fear'], ['secret', 'Secret'], ['flaw', 'Flaw'],
-  ['voice', 'Voice'], ['appearance', 'Appearance'], ['bonds', 'Connections'], ['timeline', 'Timeline'],
+  ['voice', 'Voice'], ['appearance', 'Appearance'], ['bonds', 'Connections'], ['timeline', 'Timeline'], ['customSections', 'Custom sections'],
 ];
 
 function safeFilename(value) {
@@ -2905,6 +4078,7 @@ function toText(profiles) {
     .filter(([key]) => key !== 'id' && profile[key] !== '' && profile[key] != null && (!Array.isArray(profile[key]) || profile[key].length > 0))
     .map(([key, label]) => `${label}: ${key === 'bonds'
       ? parseBonds(profile[key]).map((bond) => `${characters.find((item) => item.id === bond.id)?.name || 'Unknown'}${bond.label ? ` (${bond.label})` : ''}`).join(', ')
+      : key === 'customSections' ? parseCustomSections(profile[key]).map((section) => `${section.title}: ${section.text.replace(/\s+/g, ' ')}`).join(' | ')
       : key === 'timeline' ? parseTimeline(profile[key]).map((event) => `${event.when ? `${event.when}: ` : ''}${event.text}`).join('; ')
       : Array.isArray(profile[key]) ? profile[key].join(', ') : profile[key]}`)
     .join('\n')).join('\n\n--------------------\n\n');
@@ -3152,6 +4326,10 @@ function normalizeCharacter(record) {
     appearance: toString(get('appearance', 'looks'), 500),
     bonds: serializeBonds(parseBonds(toString(get('bonds', 'connections'), 3000))),
     timeline: serializeTimeline(parseTimeline(toString(get('timeline', 'events', 'life events'), 12000))),
+    customSections: (() => {
+      const raw = get('customSections', 'custom sections', 'custom');
+      return serializeCustomSections(parseCustomSections(Array.isArray(raw) ? JSON.stringify(raw) : toString(raw, 40000)));
+    })(),
     updatedAt: toString(get('updatedAt', 'updated at'), 40),
   };
 }
@@ -3190,7 +4368,7 @@ async function importCharacters(event) {
   const file = input.files?.[0];
   if (!file) return;
   try {
-    if (file.size > 15 * 1024 * 1024) throw new Error('Choose an import file smaller than 15 MB.');
+    if (file.size > MAX_IMPORT_FILE_BYTES) throw new Error('Choose an import file that is 5 MB or smaller.');
     const records = parseImportFile(await file.text(), file.name);
     const imported = records.map(normalizeCharacter).filter(Boolean);
     if (!imported.length) throw new Error('No characters with a name were found in that file.');
@@ -3251,7 +4429,7 @@ async function importStories(event) {
   const file = input.files?.[0];
   if (!file) return;
   try {
-    if (file.size > 15 * 1024 * 1024) throw new Error('Choose an import file smaller than 15 MB.');
+    if (file.size > MAX_IMPORT_FILE_BYTES) throw new Error('Choose an import file that is 5 MB or smaller.');
     const extension = file.name.split('.').pop().toLowerCase();
     if (!['json', 'yaml', 'yml'].includes(extension)) throw new Error('Choose a JSON or YAML story backup.');
     const contents = await file.text();
@@ -3380,6 +4558,154 @@ function exportProfiles(profiles, format, library = false) {
   }
 }
 
+function exportLibraryBackup(event) {
+  flushPendingDrafts();
+  flushPlaceDraft();
+  const format = event.currentTarget.closest('.cast-tools, .story-library-tools')
+    ?.querySelector('.export-format select')?.value || 'json';
+  const drafts = { ...storyDrafts };
+  const storyDialog = document.querySelector('#story-dialog');
+  if (storyDialog.open && !document.querySelector('#story-form').classList.contains('hidden')) {
+    const currentDraft = currentStoryDraft();
+    const saved = savedStories.find((story) => story.id === currentDraft.id);
+    const unchanged = saved && saved.title === currentDraft.title && saved.text === currentDraft.text
+      && saved.titleFont === currentDraft.titleFont && saved.bodyFont === currentDraft.bodyFont
+      && saved.backgroundColor === currentDraft.backgroundColor && saved.image === currentDraft.image
+      && storyMetaEqual(saved, currentDraft);
+    if (unchanged) delete drafts[currentDraft.id];
+    else if (currentDraft.title || currentDraft.text.trim() || currentDraft.image) drafts[currentDraft.id] = currentDraft;
+  }
+  const bundle = {
+    format: 'fable-studio-backup',
+    version: 1,
+    characters,
+    characterDraft: [readStorage(DRAFT_KEY, null)].filter(Boolean),
+    stories: savedStories,
+    drafts: Object.values(drafts),
+    places,
+    placeDrafts: Object.values(placeDrafts),
+  };
+  const content = format === 'yaml' ? toYaml(bundle) : JSON.stringify(bundle, null, 2);
+  const extension = format === 'yaml' ? 'yaml' : 'json';
+  downloadFile(`fable-studio-backup.${extension}`, content,
+    extension === 'yaml' ? 'text/yaml;charset=utf-8' : 'application/json;charset=utf-8');
+  showToast(`Characters, stories, drafts, and places exported as ${extension.toUpperCase()}.`);
+}
+
+function mergeById(existing, imported) {
+  const next = [...existing];
+  imported.forEach((item) => {
+    const index = next.findIndex((current) => current.id === item.id);
+    if (index >= 0) next[index] = item;
+    else next.unshift(item);
+  });
+  return next;
+}
+
+function normalizeBackupStories(parsed) {
+  const entries = storyRecordsFromImport(parsed);
+  const imported = entries.map(({ story, draft }) => normalizeImportedStory(story, draft)).filter(Boolean);
+  return {
+    stories: imported.filter((story) => !story.isDraft).map(({ isDraft, ...story }) => story),
+    drafts: imported.filter((story) => story.isDraft).reduce((result, { isDraft, ...draft }) => {
+      result[draft.id] = draft;
+      return result;
+    }, {}),
+  };
+}
+
+async function importLibraryBackup(event) {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  if (!file) return;
+  try {
+    if (file.size > MAX_IMPORT_FILE_BYTES) throw new Error('Choose a backup file that is 5 MB or smaller.');
+    const extension = file.name.split('.').pop().toLowerCase();
+    if (!['json', 'yaml', 'yml', 'csv'].includes(extension)) throw new Error('Choose a JSON, YAML, or legacy CSV backup.');
+    const contents = await file.text();
+    const parsed = extension === 'csv' ? { characters: parseImportFile(contents, file.name) }
+      : extension === 'json' ? JSON.parse(contents.replace(/^\uFEFF/, '')) : parseYaml(contents);
+    if (!parsed || typeof parsed !== 'object') throw new Error('The backup must contain a Fable library or exported records.');
+
+    const hasBundle = parsed.format === 'fable-studio-backup';
+    const characterRecords = Array.isArray(parsed.characters) ? parsed.characters
+      : hasBundle ? [] : parsed.character ? [parsed.character]
+        : parsed.profile ? [parsed.profile] : typeof parsed.name === 'string' ? [parsed] : [];
+    const importedCharacters = characterRecords.map(normalizeCharacter).filter(Boolean);
+    const storyResult = normalizeBackupStories(hasBundle || Array.isArray(parsed.stories) || Array.isArray(parsed.drafts)
+      ? parsed : (parsed.story || parsed.title || parsed.text ? parsed : {}));
+    const placeRecords = Array.isArray(parsed.places) ? parsed.places
+      : !hasBundle && parsed.name && !parsed.title ? [parsed] : [];
+    const importedPlaces = placeRecords.map(normalizePlace).filter(Boolean);
+
+    if (!hasBundle && !importedCharacters.length && !storyResult.stories.length
+      && !Object.keys(storyResult.drafts).length && !importedPlaces.length) {
+      const legacy = parseImportFile(contents, file.name);
+      importedCharacters.push(...legacy.map(normalizeCharacter).filter(Boolean));
+    }
+    if (!importedCharacters.length && !storyResult.stories.length && !Object.keys(storyResult.drafts).length
+      && !importedPlaces.length && !parsed.characterDraft && !parsed.placeDraft && !parsed.placeDrafts) {
+      throw new Error('No characters, stories, drafts, or places were found in that backup.');
+    }
+
+    const nextCharacters = mergeById(characters, importedCharacters);
+    const nextStories = mergeById(savedStories, storyResult.stories);
+    const nextDrafts = { ...storyDrafts, ...storyResult.drafts };
+    const nextPlaces = mergeById(places, importedPlaces);
+    const storageUpdates = [
+      [STORAGE_KEY, nextCharacters],
+      [STORIES_STORAGE_KEY, nextStories],
+      [STORY_DRAFTS_KEY, nextDrafts],
+      [PLACES_STORAGE_KEY, nextPlaces],
+    ];
+    const rawCharacterDraft = Array.isArray(parsed.characterDraft) ? parsed.characterDraft[0] : parsed.characterDraft;
+    if (rawCharacterDraft && typeof rawCharacterDraft === 'object') {
+      storageUpdates.push([DRAFT_KEY, rawCharacterDraft]);
+    }
+    const rawPlaceDrafts = Array.isArray(parsed.placeDrafts) ? parsed.placeDrafts
+      : parsed.placeDrafts && typeof parsed.placeDrafts === 'object' ? Object.values(parsed.placeDrafts) : [];
+    if (parsed.placeDraft && typeof parsed.placeDraft === 'object') rawPlaceDrafts.push(parsed.placeDraft);
+    const nextPlaceDrafts = { ...placeDrafts };
+    rawPlaceDrafts.forEach((draft) => {
+      if (!draft || typeof draft !== 'object') return;
+      const normalized = normalizePlace({ ...draft, name: draft.name || 'Untitled place' });
+      if (normalized) nextPlaceDrafts[normalized.id] = { ...normalized, name: typeof draft.name === 'string' ? draft.name : '' };
+    });
+    if (rawPlaceDrafts.length) {
+      storageUpdates.push([PLACE_DRAFT_KEY, nextPlaceDrafts]);
+    }
+    const previous = storageUpdates.map(([key]) => [key, localStorage.getItem(key)]);
+    for (let index = 0; index < storageUpdates.length; index += 1) {
+      const [key, value] = storageUpdates[index];
+      if (writeStorage(key, value)) continue;
+      previous.slice(0, index).forEach(([savedKey, stored]) => {
+        if (stored === null) localStorage.removeItem(savedKey);
+        else localStorage.setItem(savedKey, stored);
+      });
+      throw new Error('Could not import the full backup. Your browser storage may be full.');
+    }
+
+    characters = nextCharacters;
+    savedStories.splice(0, savedStories.length, ...nextStories);
+    Object.keys(storyDrafts).forEach((id) => delete storyDrafts[id]);
+    Object.assign(storyDrafts, nextDrafts);
+    places.splice(0, places.length, ...nextPlaces);
+    if (hasBundle && rawPlaceDrafts.length) {
+      Object.keys(placeDrafts).forEach((id) => delete placeDrafts[id]);
+      Object.assign(placeDrafts, nextPlaceDrafts);
+    }
+    renderCharacters();
+    renderStories();
+    renderPlaces();
+    persistCharacterLibrary();
+    showToast(`Backup imported: ${importedCharacters.length} characters, ${storyResult.stories.length} stories, ${Object.keys(storyResult.drafts).length} drafts, and ${importedPlaces.length} places.`);
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : 'Import failed. Check that the backup is valid JSON or YAML.');
+  } finally {
+    input.value = '';
+  }
+}
+
 document.querySelector('#export-character').addEventListener('click', () => {
   const profile = currentProfile();
   if (!profile.name) {
@@ -3387,17 +4713,17 @@ document.querySelector('#export-character').addEventListener('click', () => {
     document.querySelector('#name').focus();
     return;
   }
-  exportProfiles([profile], document.querySelector('#export-format').value);
+  exportProfiles([profile], document.querySelector('#character-export-format').value);
 });
 document.querySelector('#export-library').addEventListener('click', () => {
-  exportProfiles(characters, document.querySelector('#export-format').value, true);
+  exportLibraryBackup({ currentTarget: document.querySelector('#export-library') });
 });
 document.querySelector('#import-library').addEventListener('click', () => document.querySelector('#import-file').click());
-document.querySelector('#import-file').addEventListener('change', importCharacters);
+document.querySelector('#import-file').addEventListener('change', importLibraryBackup);
 document.querySelector('#profile-print').addEventListener('click', () => window.print());
-document.querySelector('#story-export').addEventListener('click', exportStories);
+document.querySelector('#story-export').addEventListener('click', exportLibraryBackup);
 document.querySelector('#story-import').addEventListener('click', () => document.querySelector('#story-import-file').click());
-document.querySelector('#story-import-file').addEventListener('change', importStories);
+document.querySelector('#story-import-file').addEventListener('change', importLibraryBackup);
 document.querySelector('#story-print').addEventListener('click', () => window.print());
 window.addEventListener('beforeprint', () => {
   if (!characterDialog.open || printSectionState) return;
@@ -3419,7 +4745,7 @@ function requestDeleteItem(id, kind, item, returnFocus = document.activeElement)
   pendingDeleteFocus = returnFocus;
   const isDraft = kind === 'story' && item.isDraft;
   const hasSavedVersion = kind === 'story' && savedStories.some((story) => story.id === id);
-  const itemType = kind === 'character' ? 'character' : isDraft && !hasSavedVersion ? 'draft' : 'story';
+  const itemType = kind === 'character' ? 'character' : kind === 'place' ? 'place' : isDraft && !hasSavedVersion ? 'draft' : 'story';
   document.querySelector('#delete-dialog-title').textContent =
     `Delete ${itemType}?`;
   document.querySelector('#delete-dialog-message').textContent =
@@ -3468,6 +4794,74 @@ document.querySelector('#confirm-delete').addEventListener('click', () => {
     resetForm();
     return;
   }
+  if (kind === 'discard-place') {
+    pendingDeleteFocus = null;
+    placeHasChanges = false;
+    window.clearTimeout(placeDraftTimer);
+    placeDraftPending = false;
+    if (placeDrafts[activePlaceId]) {
+      const nextPlaceDrafts = { ...placeDrafts };
+      delete nextPlaceDrafts[activePlaceId];
+      if (!writeStorage(PLACE_DRAFT_KEY, nextPlaceDrafts)) {
+        showToast('Could not discard this place draft. Your browser storage may be unavailable.');
+        return;
+      }
+      delete placeDrafts[activePlaceId];
+      scheduleFolderBackup();
+    }
+    deleteDialog.close();
+    closePlaceNow();
+    return;
+  }
+  if (kind === 'place') {
+    const nextPlaces = places.filter((place) => place.id !== characterId);
+    const nextStories = savedStories.map((story) => (story.placeIds || []).includes(characterId)
+      ? { ...story, placeIds: story.placeIds.filter((id) => id !== characterId) } : story);
+    const nextStoryDrafts = { ...storyDrafts };
+    Object.keys(nextStoryDrafts).forEach((id) => {
+      if ((nextStoryDrafts[id].placeIds || []).includes(characterId)) {
+        nextStoryDrafts[id] = {
+          ...nextStoryDrafts[id],
+          placeIds: nextStoryDrafts[id].placeIds.filter((placeId) => placeId !== characterId),
+        };
+      }
+    });
+    const nextPlaceDrafts = { ...placeDrafts };
+    delete nextPlaceDrafts[characterId];
+    const updates = [[PLACES_STORAGE_KEY, nextPlaces]];
+    if (nextStories.some((story, index) => story !== savedStories[index])) updates.push([STORIES_STORAGE_KEY, nextStories]);
+    if (JSON.stringify(nextStoryDrafts) !== JSON.stringify(storyDrafts)) updates.push([STORY_DRAFTS_KEY, nextStoryDrafts]);
+    if (placeDrafts[characterId]) updates.push([PLACE_DRAFT_KEY, nextPlaceDrafts]);
+    const previous = updates.map(([key]) => [key, localStorage.getItem(key)]);
+    for (let index = 0; index < updates.length; index += 1) {
+      const [key, value] = updates[index];
+      if (writeStorage(key, value)) continue;
+      previous.slice(0, index).forEach(([savedKey, stored]) => {
+        if (stored === null) localStorage.removeItem(savedKey);
+        else localStorage.setItem(savedKey, stored);
+      });
+      showToast('Could not delete this place and update its links. Your browser storage may be unavailable.');
+      return;
+    }
+    places.splice(0, places.length, ...nextPlaces);
+    savedStories.splice(0, savedStories.length, ...nextStories);
+    Object.keys(storyDrafts).forEach((id) => delete storyDrafts[id]);
+    Object.assign(storyDrafts, nextStoryDrafts);
+    if (placeDrafts[characterId]) {
+      Object.keys(placeDrafts).forEach((id) => delete placeDrafts[id]);
+      Object.assign(placeDrafts, nextPlaceDrafts);
+    }
+    renderStories();
+    renderPlaces();
+    persistCharacterLibrary();
+    deleteDialog.close();
+    if (activePlaceId === characterId) {
+      placeHasChanges = false;
+      closePlaceNow();
+    }
+    showToast('Place deleted.');
+    return;
+  }
   if (kind === 'story') {
     const wasSaved = savedStories.some((story) => story.id === characterId);
     const nextStories = savedStories.filter((story) => story.id !== characterId);
@@ -3482,6 +4876,7 @@ document.querySelector('#confirm-delete').addEventListener('click', () => {
       return;
     }
     savedStories.splice(0, savedStories.length, ...nextStories);
+    if (activeStoryId === characterId) cancelStoryDraftSave();
     delete storyDrafts[characterId];
     if (storyVersions[characterId]) {
       delete storyVersions[characterId];
@@ -3489,6 +4884,8 @@ document.querySelector('#confirm-delete').addEventListener('click', () => {
     }
     if (previewStoryId === characterId) previewStoryId = '';
     renderStories();
+    renderPlaces();
+    persistCharacterLibrary();
     deleteDialog.close();
     showToast(wasSaved ? 'Story deleted.' : 'Story draft deleted.');
     return;
@@ -3502,6 +4899,7 @@ document.querySelector('#confirm-delete').addEventListener('click', () => {
     showToast('Could not delete. Your browser storage may be unavailable.');
     return;
   }
+  removeCharacterFromLinks(characterId);
   characters = nextCharacters;
   if (characterVersions[characterId]) {
     delete characterVersions[characterId];
@@ -3514,7 +4912,7 @@ document.querySelector('#confirm-delete').addEventListener('click', () => {
   showToast('Character removed from your cast.');
 });
 
-document.querySelector('#search-characters').addEventListener('input', renderCharacters);
+document.querySelector('#search-characters').addEventListener('input', debounce(renderCharacters, 140));
 ['new-character', 'sidebar-new', 'empty-create'].forEach((id) => document.getElementById(id).addEventListener('click', (event) => requestNewCharacter(event.currentTarget)));
 document.querySelector('#duplicate-character').addEventListener('click', duplicateCharacter);
 document.querySelector('#bond-add').addEventListener('click', addBondFromEditor);
@@ -3548,6 +4946,66 @@ document.querySelector('#story-image-chip .upload-chip-remove').addEventListener
   syncStoryImageChip();
   handleStoryEditorInput();
   field.focus();
+});
+document.querySelector('#custom-add').addEventListener('click', addBlankCustomSection);
+document.querySelector('#new-place').addEventListener('click', (event) => openPlaceEditor('', event.currentTarget));
+document.querySelector('#place-empty-create').addEventListener('click', (event) => openPlaceEditor('', event.currentTarget));
+document.querySelector('#place-search').addEventListener('input', debounce(renderPlaces, 140));
+['#place-filter-kind', '#place-sort'].forEach((selector) => document.querySelector(selector).addEventListener('input', renderPlaces));
+document.querySelector('#place-export').addEventListener('click', exportLibraryBackup);
+document.querySelector('#place-import').addEventListener('click', () => document.querySelector('#place-import-file').click());
+document.querySelector('#place-import-file').addEventListener('change', importLibraryBackup);
+document.querySelector('#place-form').addEventListener('input', (event) => {
+  placeHasChanges = true;
+  if (event.target.id === 'place-description') {
+    document.querySelector('#place-description-count').textContent = String(event.target.value.length);
+  }
+  if (event.target.id === 'place-lore') {
+    document.querySelector('#place-lore-count').textContent = `${countWords(event.target.value)} words`;
+  }
+  savePlaceDraft();
+});
+document.querySelector('#place-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (savePlaceFromForm()) closePlaceNow();
+});
+document.querySelector('#place-close').addEventListener('click', requestPlaceClose);
+document.querySelector('#place-cancel').addEventListener('click', requestPlaceClose);
+document.querySelector('#place-delete').addEventListener('click', () => {
+  const place = places.find((item) => item.id === activePlaceId);
+  if (place) requestDeleteItem(place.id, 'place', place, document.querySelector('#place-delete'));
+});
+document.querySelector('#place-image-upload-button').addEventListener('click', () => document.querySelector('#place-image-file').click());
+document.querySelector('#place-image-file').addEventListener('change', handlePlaceImageUpload);
+document.querySelector('#place-image-url').addEventListener('change', () => {
+  syncPlaceImageChip();
+  placeHasChanges = true;
+  savePlaceDraft();
+});
+document.querySelector('#place-image-chip .upload-chip-remove').addEventListener('click', () => {
+  const field = document.querySelector('#place-image-url');
+  field.value = '';
+  syncPlaceImageChip();
+  placeHasChanges = true;
+  savePlaceDraft();
+  field.focus();
+});
+document.querySelector('#place-dialog').addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) requestPlaceClose();
+});
+document.querySelector('#place-dialog').addEventListener('cancel', (event) => {
+  event.preventDefault();
+  requestPlaceClose();
+});
+document.querySelector('#place-dialog').addEventListener('close', () => {
+  if (placeCloseTimer) {
+    window.clearTimeout(placeCloseTimer);
+    placeCloseTimer = null;
+  }
+  document.querySelector('#place-dialog').classList.remove('is-closing');
+  syncModalScrollLock();
+  updateBackToTopVisibility();
+  if (placeReturnFocus instanceof HTMLElement && placeReturnFocus.isConnected) placeReturnFocus.focus();
 });
 document.querySelector('#timeline-add').addEventListener('click', addTimelineEvent);
 ['#timeline-when', '#timeline-text'].forEach((selector) => document.querySelector(selector).addEventListener('keydown', (event) => {
@@ -3604,20 +5062,22 @@ document.querySelector('#story-starters').addEventListener('click', (event) => {
   const button = event.target.closest('button[data-starter]');
   if (button) insertStoryStarter(button.dataset.starter);
 });
-['#story-search', '#story-filter-kind', '#story-filter-progress', '#story-sort'].forEach((selector) => {
+document.querySelector('#story-search').addEventListener('input', debounce(renderStories, 140));
+['#story-filter-kind', '#story-filter-progress', '#story-sort'].forEach((selector) => {
   document.querySelector(selector).addEventListener('input', renderStories);
 });
 document.querySelector('#story-dialog').addEventListener('click', (event) => {
   if (event.target === event.currentTarget) event.currentTarget.close();
 });
 document.querySelector('#story-dialog').addEventListener('close', () => {
+  flushStoryDraft();
   renderStories();
   updateBackToTopVisibility();
   if (storyReturnFocus instanceof HTMLElement && storyReturnFocus.isConnected) storyReturnFocus.focus();
 });
 
 const navLinks = [...document.querySelectorAll('.nav-link')];
-const navSections = ['studio', 'cast', 'lore'].map((id) => document.getElementById(id));
+const navSections = ['studio', 'cast', 'lore', 'places'].map((id) => document.getElementById(id));
 let scrollSpyFrame = 0;
 
 function setActiveNavigation(sectionId) {
@@ -3666,7 +5126,7 @@ if (savedDraft) {
     gallery: savedDraft.gallery, relations: savedDraft.relations, links: savedDraft.links,
     worlds: savedDraft.worlds, stats: savedDraft.stats, groups: traitsValue(savedDraft.groups),
     goal: savedDraft.goal, fear: savedDraft.fear, secret: savedDraft.secret, flaw: savedDraft.flaw,
-    voice: savedDraft.voice, appearance: savedDraft.appearance, bonds: savedDraft.bonds, timeline: savedDraft.timeline,
+    voice: savedDraft.voice, appearance: savedDraft.appearance, bonds: savedDraft.bonds, timeline: savedDraft.timeline, customSections: savedDraft.customSections,
   }).forEach(([id, value]) => { document.getElementById(id).value = value || ''; });
   imageCropState = {
     avatar: normalizeImageCrop(savedDraft.avatarCrop),
@@ -3682,7 +5142,10 @@ if (savedDraft) {
   }
 }
 rememberImageSources();
+initUiPrefs();
 renderCharacters();
 renderStories();
+renderPlaces();
+updateStorageMeter();
 updatePreview();
 initializeDataFolder();
